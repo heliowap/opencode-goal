@@ -54,6 +54,12 @@ export const isUnfinished = (goal: Goal | undefined) => goal !== undefined && go
 
 const outOfBudget = (goal: Goal) => goal.tokenBudget !== null && goal.tokensUsed >= goal.tokenBudget
 
+const resumeRefusal = (goal: Goal): string | undefined => {
+  if (goal.status === "complete") return "The goal is complete. Set a new goal instead."
+  if (outOfBudget(goal)) return "The goal has used its token budget. Set a new goal with a larger --tokens budget."
+  return undefined
+}
+
 export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Step => {
   const unchanged: Step = { goal, effect: none }
   const update = (patch: Partial<Goal>, effect: GoalEffect = none): Step => ({
@@ -85,13 +91,15 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
   switch (event._tag) {
     case "Clear":
       return { goal: undefined, effect: notify("Goal cleared.") }
-    case "Edit":
-      return goal.status === "active"
-        ? update({ objective: event.objective, emptyTurns: 0 }, { _tag: "ObjectiveUpdated" })
-        : update(
-            { objective: event.objective },
-            notify(`Objective updated. The goal is ${goal.status}; run /goal resume to continue.`),
-          )
+    case "Edit": {
+      if (goal.status === "active") return update({ objective: event.objective, emptyTurns: 0 }, { _tag: "ObjectiveUpdated" })
+      const refusal = resumeRefusal(goal)
+      if (refusal) return { goal, effect: notify(refusal) }
+      return update(
+        { objective: event.objective },
+        notify(`Objective updated. The goal is ${goal.status}; run /goal resume to continue.`),
+      )
+    }
     case "Pause":
       return goal.status === "active"
         ? update({ status: "paused", note: "Paused by the user." }, notify("Goal paused."))
@@ -100,10 +108,8 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
       return goal.status === "active" ? update({ status: "paused", note: event.note ?? "Paused at the user's request." }) : unchanged
     case "Resume": {
       if (goal.status === "active") return { goal, effect: notify("The goal is already active.") }
-      if (goal.status === "complete") return { goal, effect: notify("The goal is complete. Set a new goal instead.") }
-      if (outOfBudget(goal)) {
-        return { goal, effect: notify("The goal has used its token budget. Set a new goal with a larger --tokens budget.") }
-      }
+      const refusal = resumeRefusal(goal)
+      if (refusal) return { goal, effect: notify(refusal) }
       return update({ status: "active", note: undefined, emptyTurns: 0 }, { _tag: "Continue" })
     }
     case "Complete":
