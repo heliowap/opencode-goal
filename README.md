@@ -7,16 +7,13 @@ Codex-style `/goal` for OpenCode 2. A persistent, per-session objective that kee
 
 ## Install
 
-Requires OpenCode 2 and Bun.
+Requires OpenCode 2.
 
 ```sh
-git clone https://github.com/heliowap/opencode-v2-goal-plugin.git
-cd opencode-v2-goal-plugin
-bun install
-./install.sh
+opencode plugin add github:heliowap/opencode-v2-goal-plugin
 ```
 
-`install.sh` links `~/.config/opencode/plugins/goal.ts` to `src/index.ts`. Restart the service with `opencode service restart` to load the plugin.
+This installs the plugin and adds it to your global `opencode.jsonc`. If `/goal` does not show up, run `opencode service restart`. Update with `opencode plugin update` and uninstall with `opencode plugin remove github:heliowap/opencode-v2-goal-plugin`.
 
 ## Use
 
@@ -53,6 +50,18 @@ Replies to `/goal`, `pause`, `resume`, `edit`, and `clear` are queued as synthet
 The prompts in `templates/` and the tool descriptions are adapted from the `/goal` extension in [OpenAI Codex](https://github.com/openai/codex/tree/main/codex-rs/ext/goal), licensed under Apache-2.0. They were modified to use OpenCode tool names. See `NOTICE`.
 
 ## Develop
+
+Requires Bun. Clone the repository and load your checkout instead of the published package:
+
+```sh
+git clone https://github.com/heliowap/opencode-v2-goal-plugin.git
+cd opencode-v2-goal-plugin
+bun install
+opencode plugin remove github:heliowap/opencode-v2-goal-plugin   # if installed, so only one goal plugin loads
+ln -sfn "$PWD/src/index.ts" ~/.config/opencode/plugins/goal.ts
+```
+
+OpenCode reloads the plugin when you save files under `src/`.
 
 ```sh
 bun test
