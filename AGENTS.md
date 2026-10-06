@@ -4,5 +4,5 @@ OpenCode 2 plugin that adds a Codex-style `/goal`. Bun, TypeScript, Effect.
 
 Before editing `src/`, `test/`, or `templates/`, read `CODING_STANDARDS.md`.
 
-- Verify with `bun test` and `bun run typecheck`; changes to `src/index.ts` also need `bun test ./host`.
+- Verify with `bun test` and `bun run typecheck`; changes to `src/index.ts` also need `bun test ./host`; changes to `src/goal.ts`, `src/command.ts`, or `src/prompts.ts` also need `bun run mutation`.
 - This checkout is the live plugin on this machine: saving `src/` reloads it in every OpenCode session.

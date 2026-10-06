@@ -76,6 +76,7 @@ OpenCode reloads the plugin when you save files under `src/`.
 ```sh
 bun test                      # unit tests, 100% line and function coverage enforced
 bun run typecheck
+bun run mutation              # mutation testing: every mutant of goal.ts, command.ts, prompts.ts must be killed
 bun test ./host               # host canaries: needs `opencode` 2.0.24 on PATH
 LIVE_MODEL="<provider>/<model>" bun test ./host/live/live.test.ts   # live models, uses your provider config
 ```
