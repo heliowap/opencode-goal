@@ -1,5 +1,5 @@
 import type { Goal, Status } from "./goal.ts"
-import { formatTokens } from "./prompts.ts"
+import { formatTokens } from "./format.ts"
 
 export type Tone = "accent" | "muted" | "warning" | "error"
 

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs"
+import { formatTokens } from "./format.ts"
 import type { Goal } from "./goal.ts"
 
 const template = (name: string) => readFileSync(new URL(`../templates/${name}.md`, import.meta.url), "utf8").trim()
@@ -14,13 +15,6 @@ export const render = (source: string, values: Record<string, string>) =>
   source.replace(/\{\{(\w+)\}\}/g, (match, key: string) => values[key] ?? match)
 
 export const escapeXml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-
-export const formatTokens = (tokens: number) =>
-  tokens >= 1_000_000
-    ? `${+(tokens / 1_000_000).toFixed(2)}M`
-    : tokens >= 1_000
-      ? `${+(tokens / 1_000).toFixed(1)}K`
-      : String(tokens)
 
 export const formatElapsed = (ms: number) => {
   const minutes = Math.floor(ms / 60_000)

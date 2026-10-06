@@ -34,7 +34,10 @@ export default Plugin.define({
     context.ui.slot({
       append: "session.composer.top",
       render: (slot) => {
-        void rpc.get({ sessionID: slot.sessionID }).then((result) => remember(slot.sessionID, (result as { goal: unknown }).goal))
+        // A changed event that lands while get is in flight is newer than its result.
+        void rpc.get({ sessionID: slot.sessionID }).then((result) => {
+          if (!(slot.sessionID in goals)) remember(slot.sessionID, (result as { goal: unknown }).goal)
+        })
         const badge = () =>
           goalBadge(goals[slot.sessionID] ?? undefined, context.data.session.status(slot.sessionID) === "running")
         return (
