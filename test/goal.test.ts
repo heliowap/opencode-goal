@@ -145,9 +145,50 @@ describe("usage of the step that ends the goal (#2)", () => {
     })
   })
 
+  test("a closing step that crosses the budget of a goal the model paused leaves it budget_limited", () => {
+    const paused = active({ status: "paused", note: "user asked", tokenBudget: 1_000, tokensUsed: 900 })
+    expect(step(paused, { _tag: "Usage", tokens: 200, closing: true }, T1)).toEqual({
+      goal: active({ status: "budget_limited", note: "Token budget reached.", tokenBudget: 1_000, tokensUsed: 1_100, updatedAt: T1 }),
+      effect: { _tag: "None" },
+    })
+  })
+
+  test("a closing step keeps a blocked or complete goal's status even past its budget", () => {
+    for (const status of ["blocked", "complete"] as const) {
+      expect(step(active({ status, tokenBudget: 1_000, tokensUsed: 900 }), { _tag: "Usage", tokens: 200, closing: true }, T1)).toEqual({
+        goal: active({ status, tokenBudget: 1_000, tokensUsed: 1_100, updatedAt: T1 }),
+        effect: { _tag: "None" },
+      })
+    }
+  })
+
   test("later steps on an ended goal are not charged", () => {
     const done = active({ status: "complete", tokensUsed: 4_500 })
     expect(step(done, { _tag: "Usage", tokens: 4_000, closing: false }, T1)).toEqual({ goal: done, effect: { _tag: "None" } })
+  })
+})
+
+describe("goal_create (Create)", () => {
+  const create = { _tag: "Create", objective: "second", tokenBudget: 5_000, directory: "/other" } as const
+
+  test("creates an active goal when the session has none or a complete one", () => {
+    const created = active({ objective: "second", tokenBudget: 5_000, directory: "/other", createdAt: T1, updatedAt: T1 })
+    expect(step(undefined, create, T1)).toEqual({ goal: created, effect: { _tag: "None" } })
+    expect(step(active({ status: "complete" }), create, T1)).toEqual({ goal: created, effect: { _tag: "None" } })
+  })
+
+  test.each([["active"], ["paused"], ["blocked"], ["budget_limited"]] as const)("leaves an unfinished %s goal in place", (status) => {
+    const goal = active({ status })
+    expect(step(goal, create, T1)).toEqual({ goal, effect: { _tag: "None" } })
+  })
+})
+
+describe("session moved (Moved)", () => {
+  test("the goal follows the session to its new directory", () => {
+    expect(step(active({ status: "paused" }), { _tag: "Moved", directory: "/elsewhere" }, T1)).toEqual({
+      goal: active({ status: "paused", directory: "/elsewhere", updatedAt: T1 }),
+      effect: { _tag: "None" },
+    })
   })
 })
 
@@ -159,7 +200,10 @@ describe("model updates", () => {
   })
 
   test("a budget-limited goal can still be completed", () => {
-    expect(step(active({ status: "budget_limited" }), { _tag: "Complete", note: "done" }, T1).goal?.status).toBe("complete")
+    expect(step(active({ status: "budget_limited" }), { _tag: "Complete", note: "done" }, T1)).toEqual({
+      goal: active({ status: "complete", note: "done", updatedAt: T1 }),
+      effect: { _tag: "None" },
+    })
   })
 
   test("block records the missing decision", () => {
@@ -349,9 +393,10 @@ describe("model notes and budgets", () => {
   })
 
   test("usage landing exactly on the budget limits the goal", () => {
-    expect(step(active({ tokenBudget: 1_000, tokensUsed: 800 }), { _tag: "Usage", tokens: 200, closing: false }, T1).goal?.status).toBe(
-      "budget_limited",
-    )
+    expect(step(active({ tokenBudget: 1_000, tokensUsed: 800 }), { _tag: "Usage", tokens: 200, closing: false }, T1)).toEqual({
+      goal: active({ status: "budget_limited", note: "Token budget reached.", tokenBudget: 1_000, tokensUsed: 1_000, updatedAt: T1 }),
+      effect: { _tag: "WrapUp" },
+    })
   })
 })
 
