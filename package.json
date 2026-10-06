@@ -1,0 +1,23 @@
+{
+  "name": "opencode-goal",
+  "version": "0.1.0",
+  "description": "Codex-style /goal for OpenCode: a persistent, audited objective that keeps a session working across turns",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.0.24",
+    "@opencode/schema": "2.0.24",
+    "effect": "4.0.0-rc.112"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@typescript/native-preview": "^7.0.0-dev"
+  }
+}
