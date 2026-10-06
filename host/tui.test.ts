@@ -71,6 +71,7 @@ describe.skipIf(!tmux && !process.env.CI)("status above the input in the termina
     "T2 an active goal between turns, blocked, and over budget",
     async () => {
       host = await Host.start({
+        ...(process.env.GOAL_PLUGIN_SPEC && { pluginSpec: process.env.GOAL_PLUGIN_SPEC }),
         script: (request) => {
           if (request.messages.some((message) => message.role === "user" && JSON.stringify(message).includes("over budget"))) {
             return afterToolResult(request) ? { text: "Done." } : { text: "Spending." }
