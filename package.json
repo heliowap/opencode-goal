@@ -1,5 +1,5 @@
 {
-  "name": "opencode-goal",
+  "name": "opencode-v2-goal-plugin",
   "version": "0.1.0",
   "description": "Codex-style /goal for OpenCode: a persistent, audited objective that keeps a session working across turns",
   "type": "module",

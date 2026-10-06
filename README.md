@@ -1,4 +1,7 @@
-# opencode-goal
+# opencode-v2-goal-plugin
+
+> [!NOTE]
+> This is a community plugin. It is not built by the OpenCode team and is not affiliated with OpenCode in any way.
 
 Codex-style `/goal` for OpenCode 2. A persistent, per-session objective that keeps the agent working across turns until completion is audited against evidence.
 
@@ -7,8 +10,8 @@ Codex-style `/goal` for OpenCode 2. A persistent, per-session objective that kee
 Requires OpenCode 2 and Bun.
 
 ```sh
-git clone https://github.com/heliowap/opencode-goal.git
-cd opencode-goal
+git clone https://github.com/heliowap/opencode-v2-goal-plugin.git
+cd opencode-v2-goal-plugin
 bun install
 ./install.sh
 ```
