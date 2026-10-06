@@ -47,7 +47,10 @@ describe.skipIf(!tmux && !process.env.CI)("status above the input in the termina
   test(
     "T1 running with usage, then paused, then gone after clear",
     async () => {
-      host = await Host.start({ script: () => ({ text: "Step.", delayMs: 4_000 }) })
+      host = await Host.start({
+        script: () => ({ text: "Step.", delayMs: 4_000 }),
+        ...(process.env.GOAL_PLUGIN_SPEC && { pluginSpec: process.env.GOAL_PLUGIN_SPEC }),
+      })
       const session = await host.session()
       await host.goal(session, "--tokens 50K show me in the bar")
       open(session)
