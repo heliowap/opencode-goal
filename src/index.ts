@@ -49,6 +49,11 @@ const updateInput = toolInput(UpdateInput)
 
 const PLANNING_AGENTS = new Set(["plan"])
 
+// Survives plugin reloads inside one server process, but not a process restart.
+const RECOVERED_LOCATIONS: Set<string> = ((globalThis as Record<symbol, Set<string> | undefined>)[
+  Symbol.for("opencode-v2-goal-plugin/recovered-locations")
+] ??= new Set())
+
 const toolError = (error: unknown) =>
   error instanceof Tool.Error ? error : new Tool.Error({ message: `goal: ${String(error)}` })
 
@@ -261,6 +266,25 @@ export default Plugin.define({
           default:
             return Effect.void
         }
+      }
+
+      const recover = Effect.gen(function* () {
+        let after: string | undefined
+        do {
+          const page = yield* ctx.storage.scan({ prefix: "goal/", after, limit: 100 })
+          for (const entry of page.entries) {
+            const goal = decodeGoal(entry.value)
+            if (goal?.status === "active" && goal.directory === ctx.location.directory) {
+              yield* transition(entry.key.slice("goal/".length), { _tag: "Recovered" }, { quiet: true })
+            }
+          }
+          after = page.next
+        } while (after)
+      })
+
+      if (!RECOVERED_LOCATIONS.has(ctx.location.directory)) {
+        RECOVERED_LOCATIONS.add(ctx.location.directory)
+        yield* recover.pipe(Effect.catchCause((cause) => Effect.logError("goal: recovery failed", cause)))
       }
 
       yield* ctx.event.subscribe().pipe(

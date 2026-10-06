@@ -181,6 +181,25 @@ describe("model updates", () => {
   })
 })
 
+describe("recovery after a restart (#3)", () => {
+  test("an active goal comes back paused", () => {
+    expect(step(active({ tokensUsed: 700 }), { _tag: "Recovered" }, T1)).toEqual({
+      goal: active({
+        tokensUsed: 700,
+        status: "paused",
+        note: "Recovered after a restart. Run /goal resume to continue.",
+        updatedAt: T1,
+      }),
+      effect: { _tag: "None" },
+    })
+  })
+
+  test.each([["paused"], ["blocked"], ["budget_limited"], ["complete"]] as const)("a %s goal is left as it was", (status) => {
+    const goal = active({ status })
+    expect(step(goal, { _tag: "Recovered" }, T1)).toEqual({ goal, effect: { _tag: "None" } })
+  })
+})
+
 describe("interruptions and failures", () => {
   test("a user interrupt pauses the goal", () => {
     expect(step(active(), { _tag: "Interrupted", reason: "user" }, T1).goal).toEqual(

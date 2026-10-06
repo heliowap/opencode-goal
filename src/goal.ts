@@ -34,6 +34,7 @@ export type GoalEvent =
   | { readonly _tag: "TurnEnded"; readonly activity: boolean; readonly planning: boolean }
   | { readonly _tag: "Interrupted"; readonly reason: "user" | "shutdown" | "superseded" | "inactivity" }
   | { readonly _tag: "Failed"; readonly message: string }
+  | { readonly _tag: "Recovered" }
 
 export type GoalEffect =
   | { readonly _tag: "None" }
@@ -129,6 +130,10 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
     case "Interrupted":
       return goal.status === "active" && event.reason === "user"
         ? update({ status: "paused", note: "Interrupted by the user." })
+        : unchanged
+    case "Recovered":
+      return goal.status === "active"
+        ? update({ status: "paused", note: "Recovered after a restart. Run /goal resume to continue." })
         : unchanged
     case "Failed":
       return goal.status === "active" ? update({ status: "blocked", note: `Turn failed: ${event.message}` }) : unchanged
