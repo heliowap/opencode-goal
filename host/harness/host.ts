@@ -109,7 +109,7 @@ export class Host {
       } catch {}
       await sleep(100)
     }
-    for (let attempt = 0; attempt < 300; attempt++) {
+    for (let attempt = 0; attempt < 1_800; attempt++) {
       const commands = (await this.json("GET", `/api/command?location[directory]=${encodeURIComponent(this.project)}`)) as {
         data?: { name: string }[]
       }
