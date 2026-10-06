@@ -1,26 +1,35 @@
-import { readFileSync } from "node:fs"
 import { Plugin } from "@opencode/plugin/effect"
 import { Tool } from "@opencode/schema/tool"
 import { Effect, Schema, Semaphore, Stream } from "effect"
 import { parseCommand } from "./command.ts"
-import { decodeGoal, step, type Goal, type GoalEffect, type GoalEvent } from "./goal.ts"
-import { continuePrompt, startPrompt, statusText, stripFrontmatter, systemBlock, wrapUpPrompt } from "./prompts.ts"
-
-const protocol = stripFrontmatter(readFileSync(new URL("../skill/SKILL.md", import.meta.url), "utf8"))
+import { decodeGoal, isUnfinished, step, type Goal, type GoalEffect, type GoalEvent } from "./goal.ts"
+import {
+  budgetLimitPrompt,
+  continuationPrompt,
+  formatTokens,
+  objectiveUpdatedPrompt,
+  sessionContext,
+  statusText,
+} from "./prompts.ts"
 
 const CreateInput = Schema.Struct({
   objective: Schema.String.annotate({
-    description: "Objetivo auditável: resultado, prova de conclusão e restrições.",
+    description:
+      "Required. The concrete objective to pursue: the end state, the evidence that proves it, and what must not regress.",
   }),
-  turn_budget: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
-    description: "Máximo de turnos. Omita para não limitar.",
+  token_budget: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
+    description: "Positive token budget for the goal. Omit unless the user explicitly asks for one.",
   }),
 })
 
 const UpdateInput = Schema.Struct({
-  status: Schema.Literals(["complete", "blocked"]),
-  evidence: Schema.String.annotate({
-    description: "complete: cada requisito com a evidência observada. blocked: a decisão que falta do usuário.",
+  status: Schema.Literals(["complete", "blocked", "paused"]).annotate({
+    description:
+      "Required. `paused` requires an explicit user request. `complete` only when the objective is achieved and no required work remains. `blocked` only after the same blocking condition has recurred for at least three consecutive goal turns.",
+  }),
+  note: Schema.optional(Schema.String).annotate({
+    description:
+      "For `complete`, the requirement-by-requirement evidence. For `blocked`, the blocking condition and the user input or external change it needs.",
   }),
 })
 
@@ -30,50 +39,61 @@ const toolInput = <S extends Schema.Top & { readonly DecodingServices: never }>(
   input: Schema.toJsonSchemaDocument(schema).schema,
   decode: (value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value).pipe(
-      Effect.mapError((issue) => new Tool.Error({ message: `goal: entrada inválida. ${String(issue)}` })),
+      Effect.mapError((issue) => new Tool.Error({ message: `goal: invalid input. ${String(issue)}` })),
     ),
 })
 
 const createInput = toolInput(CreateInput)
 const updateInput = toolInput(UpdateInput)
 
+const PLANNING_AGENTS = new Set(["plan"])
+
+const toolError = (error: unknown) =>
+  error instanceof Tool.Error ? error : new Tool.Error({ message: `goal: ${String(error)}` })
+
 export default Plugin.define({
   id: "goal",
   effect: (ctx) =>
     Effect.gen(function* () {
       const lock = yield* Semaphore.make(1)
-      const toolCalls = new Map<string, number>()
+      const activity = new Set<string>()
+      const agents = new Map<string, string>()
       const resumePending = new Set<string>()
       const key = (sessionID: string) => `goal/${sessionID}`
       const now = () => Date.now()
+      const planning = (sessionID: string) => PLANNING_AGENTS.has(agents.get(sessionID) ?? "")
 
       const load = (sessionID: string) => ctx.storage.get(key(sessionID)).pipe(Effect.map(decodeGoal))
 
       const save = (sessionID: string, goal: Goal | undefined) =>
         goal ? ctx.storage.set(key(sessionID), goal) : ctx.storage.remove(key(sessionID))
 
-      const send = (sessionID: string, text: string, resume: boolean) =>
+      const send = (sessionID: string, text: string, options: { resume: boolean; delivery: "steer" | "queue" }) =>
         ctx.session
-          .synthetic({ sessionID: sessionID as never, text, description: "goal", resume, delivery: "queue" })
+          .synthetic({ sessionID: sessionID as never, text, description: "goal", ...options })
           .pipe(Effect.asVoid)
 
-      const resumeOnce = (sessionID: string, text: string) =>
+      const notice = (sessionID: string, text: string) =>
+        send(sessionID, `[goal] ${text}`, { resume: false, delivery: "queue" })
+
+      const drive = (sessionID: string, text: string, delivery: "steer" | "queue") =>
         resumePending.has(sessionID)
           ? Effect.void
-          : send(sessionID, text, true).pipe(Effect.tap(() => Effect.sync(() => resumePending.add(sessionID))))
+          : send(sessionID, text, { resume: true, delivery }).pipe(
+              Effect.tap(() => Effect.sync(() => resumePending.add(sessionID))),
+            )
 
       const perform = (sessionID: string, goal: Goal | undefined, effect: GoalEffect) => {
+        if (effect._tag === "None") return Effect.void
+        if (effect._tag === "Notify") return notice(sessionID, effect.text)
+        if (!goal) return Effect.void
         switch (effect._tag) {
-          case "None":
-            return Effect.void
-          case "Notify":
-            return send(sessionID, `[goal] ${effect.text}`, false)
-          case "Start":
-            return goal ? resumeOnce(sessionID, startPrompt(goal)) : Effect.void
           case "Continue":
-            return goal ? resumeOnce(sessionID, continuePrompt(goal)) : Effect.void
+            return drive(sessionID, continuationPrompt(goal, now()), "queue")
           case "WrapUp":
-            return goal ? resumeOnce(sessionID, wrapUpPrompt(goal)) : Effect.void
+            return drive(sessionID, budgetLimitPrompt(goal, now()), "steer")
+          case "ObjectiveUpdated":
+            return drive(sessionID, objectiveUpdatedPrompt(goal, now()), "steer")
         }
       }
 
@@ -88,64 +108,68 @@ export default Plugin.define({
           }),
         )
 
-      const toolError = (error: unknown) => new Tool.Error({ message: `goal: ${String(error)}` })
-
       const ownedGoal = (sessionID: string) =>
         load(sessionID).pipe(Effect.map((goal) => (goal?.directory === ctx.location.directory ? goal : undefined)))
+
+      const onEvent = (sessionID: string, event: GoalEvent) =>
+        ownedGoal(sessionID).pipe(
+          Effect.flatMap((goal) => (goal ? Effect.asVoid(transition(sessionID, event)) : Effect.void)),
+        )
 
       yield* ctx.command.transform((editor) => {
         editor.add({
           name: "goal",
-          description: "Define, mostra, pausa, retoma ou limpa o goal persistente da sessão",
+          description: "Set, show, edit, pause, resume, or clear the session's persistent goal",
           execute: ({ sessionID, prompt }) => {
             const command = parseCommand(prompt.text)
             switch (command._tag) {
               case "Invalid":
-                return send(sessionID, `[goal] ${command.message}`, false)
+                return notice(sessionID, command.message)
               case "Status":
-                return load(sessionID).pipe(
-                  Effect.flatMap((goal) => send(sessionID, `[goal] ${statusText(goal, now())}`, false)),
-                )
+                return load(sessionID).pipe(Effect.flatMap((goal) => notice(sessionID, statusText(goal, now()))))
               case "Set":
-                return transition(sessionID, { ...command, directory: ctx.location.directory })
+                return Effect.asVoid(transition(sessionID, { ...command, directory: ctx.location.directory }))
               default:
-                return transition(sessionID, command)
+                return Effect.asVoid(transition(sessionID, command))
             }
           },
         })
       })
 
       yield* ctx.tool.transform((editor) => {
-        editor.namespace({ name: "goal", description: "Goal persistente da sessão" })
+        editor.namespace({ name: "goal", description: "The session's persistent goal" })
         editor.add({
           name: "create",
           description:
-            "Cria um goal persistente: a sessão continua trabalhando entre turnos até o objetivo ser auditado como concluído. Use só quando o usuário pedir trabalho contínuo até uma condição.",
+            "Create a persistent goal that keeps this session working across turns until the objective is audited as complete. Create a goal only when the user or system instructions explicitly ask for one; do not infer goals from ordinary tasks. Set token_budget only when the user asks for a budget. Fails if an unfinished goal exists.",
           input: createInput.input,
           options: { namespace: "goal", codemode: false },
           execute: (raw, context) =>
             Effect.gen(function* () {
               const input = yield* createInput.decode(raw)
               const existing = yield* load(context.sessionID)
-              if (existing && (existing.status === "active" || existing.status === "paused")) {
-                return { content: `Já existe um goal ${existing.status}. O usuário troca com /goal <objetivo>.` }
+              if (isUnfinished(existing)) {
+                return yield* new Tool.Error({
+                  message: `This session already has an unfinished goal (${existing!.status}). Finish it, or ask the user to replace it with /goal <objective>.`,
+                })
               }
               const goal = yield* transition(
                 context.sessionID,
                 {
                   _tag: "Set",
                   objective: input.objective,
-                  turnBudget: input.turn_budget ?? null,
+                  tokenBudget: input.token_budget ?? null,
                   directory: ctx.location.directory,
                 },
                 { quiet: true },
               )
-              return { content: `Goal criado.\n${statusText(goal, now())}` }
-            }).pipe(Effect.mapError((error) => (error instanceof Tool.Error ? error : toolError(error)))),
+              return { content: `Goal created.\n${statusText(goal, now())}` }
+            }).pipe(Effect.mapError(toolError)),
         })
         editor.add({
           name: "get",
-          description: "Mostra o goal da sessão: objetivo, status, turnos e nota.",
+          description:
+            "Get the session's goal: objective, status, token usage, remaining token budget, and elapsed time.",
           input: { type: "object", properties: {}, additionalProperties: false },
           options: { namespace: "goal", codemode: false },
           execute: (_input, context) =>
@@ -153,55 +177,71 @@ export default Plugin.define({
         })
         editor.add({
           name: "update",
-          description:
-            'Encerra o goal ativo. "complete" exige a auditoria com evidência para cada requisito. "blocked" quando todo caminho depende do usuário.',
+          description: [
+            "Update the status of the existing goal.",
+            "Set `paused` only at the user's explicit request, never on your own initiative. Report the returned status and stop goal work. Budget limits take precedence over pausing.",
+            "Set `complete` only when the objective has actually been achieved and no required work remains, and put the requirement-by-requirement evidence in note.",
+            "Set `blocked` only when the same blocking condition has repeated for at least three consecutive goal turns and you cannot make meaningful progress without user input or an external-state change. A resumed goal starts a fresh blocked audit.",
+            "Do not use `blocked` merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification. Do not mark a goal complete because its budget is nearly exhausted or because you are stopping work.",
+            "You cannot resume or budget-limit a goal with this tool.",
+          ].join("\n"),
           input: updateInput.input,
           options: { namespace: "goal", codemode: false },
           execute: (raw, context) =>
-            updateInput.decode(raw).pipe(
-              Effect.flatMap((input) =>
-                transition(
-                  context.sessionID,
-                  input.status === "complete"
-                    ? { _tag: "Complete", evidence: input.evidence }
-                    : { _tag: "Block", reason: input.evidence },
-                ).pipe(Effect.mapError(toolError)),
-              ),
-              Effect.map((goal) => ({
-                content: goal ? `Goal ${goal.status}.` : "Nenhum goal nesta sessão.",
-              })),
-            ),
+            Effect.gen(function* () {
+              const input = yield* updateInput.decode(raw)
+              const before = yield* load(context.sessionID)
+              if (!before) return yield* new Tool.Error({ message: "No goal is set for this session." })
+              const event: GoalEvent =
+                input.status === "complete"
+                  ? { _tag: "Complete", note: input.note }
+                  : input.status === "blocked"
+                    ? { _tag: "Block", note: input.note }
+                    : { _tag: "PauseRequested", note: input.note }
+              const goal = yield* transition(context.sessionID, event)
+              if (goal?.status !== input.status) {
+                return yield* new Tool.Error({
+                  message: `The goal is ${goal?.status ?? "cleared"} and cannot move to ${input.status}.`,
+                })
+              }
+              const budget =
+                goal.tokenBudget === null ? "" : ` Final usage: ${formatTokens(goal.tokensUsed)} of ${formatTokens(goal.tokenBudget)} tokens.`
+              return { content: `Goal ${goal.status}.${budget}` }
+            }).pipe(Effect.mapError(toolError)),
         })
       })
 
-      yield* ctx.tool.hook("execute.after", (event) =>
-        Effect.sync(() => toolCalls.set(event.sessionID, (toolCalls.get(event.sessionID) ?? 0) + 1)),
-      )
+      yield* ctx.tool.hook("execute.after", (event) => Effect.sync(() => activity.add(event.sessionID)))
 
       yield* ctx.session.hook("context", (event) =>
-        ownedGoal(event.sessionID).pipe(
-          Effect.map((goal) => {
-            if (goal?.status === "active") event.system.push({ type: "text", text: systemBlock(goal, protocol) })
-          }),
-        ),
+        Effect.gen(function* () {
+          agents.set(event.sessionID, event.agent)
+          const goal = yield* ownedGoal(event.sessionID)
+          if (goal?.status === "active") event.system.push({ type: "text", text: sessionContext(goal, now()) })
+        }),
       )
-
-      const onEvent = (sessionID: string, event: GoalEvent) =>
-        ownedGoal(sessionID).pipe(
-          Effect.flatMap((goal) => (goal ? Effect.asVoid(transition(sessionID, event)) : Effect.void)),
-        )
 
       const handle = (event: Stream.Success<ReturnType<typeof ctx.event.subscribe>>) => {
         switch (event.type) {
           case "session.execution.started":
             return Effect.sync(() => {
-              toolCalls.set(event.data.sessionID, 0)
+              activity.delete(event.data.sessionID)
               resumePending.delete(event.data.sessionID)
             })
+          case "session.text.ended":
+            return Effect.sync(() => {
+              if (event.data.text.trim()) activity.add(event.data.sessionID)
+            })
+          case "session.step.ended": {
+            const { sessionID, tokens } = event.data
+            if (planning(sessionID)) return Effect.void
+            return onEvent(sessionID, { _tag: "Usage", tokens: tokens.input + tokens.output + tokens.reasoning })
+          }
           case "session.execution.succeeded":
             return onEvent(event.data.sessionID, {
               _tag: "TurnEnded",
-              toolCalls: toolCalls.get(event.data.sessionID) ?? 0,
+              activity: activity.has(event.data.sessionID),
+              planning: planning(event.data.sessionID),
             })
           case "session.execution.interrupted":
             return onEvent(event.data.sessionID, { _tag: "Interrupted", reason: event.data.reason })

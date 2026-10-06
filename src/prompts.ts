@@ -1,46 +1,55 @@
+import { readFileSync } from "node:fs"
 import type { Goal } from "./goal.ts"
 
-const turns = (goal: Goal) =>
-  goal.turnBudget === null ? `${goal.turnsUsed} turnos usados, sem orçamento` : `${goal.turnsUsed} de ${goal.turnBudget} turnos`
+const template = (name: string) => readFileSync(new URL(`../templates/${name}.md`, import.meta.url), "utf8").trim()
 
-const elapsed = (goal: Goal, now: number) => {
-  const minutes = Math.floor((now - goal.createdAt) / 60_000)
+const templates = {
+  continuation: template("continuation"),
+  budgetLimit: template("budget_limit"),
+  objectiveUpdated: template("objective_updated"),
+  sessionContext: template("session_context"),
+}
+
+export const render = (source: string, values: Record<string, string>) =>
+  source.replace(/\{\{(\w+)\}\}/g, (match, key: string) => values[key] ?? match)
+
+export const escapeXml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+
+export const formatTokens = (tokens: number) =>
+  tokens >= 1_000_000
+    ? `${+(tokens / 1_000_000).toFixed(2)}M`
+    : tokens >= 1_000
+      ? `${+(tokens / 1_000).toFixed(1)}K`
+      : String(tokens)
+
+export const formatElapsed = (ms: number) => {
+  const minutes = Math.floor(ms / 60_000)
   return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`
 }
 
-export const stripFrontmatter = (markdown: string) => markdown.replace(/^---\n[\s\S]*?\n---\n/, "").trim()
+const values = (goal: Goal, now: number) => ({
+  objective: escapeXml(goal.objective),
+  tokensUsed: String(goal.tokensUsed),
+  tokenBudget: goal.tokenBudget === null ? "none" : String(goal.tokenBudget),
+  tokensRemaining: goal.tokenBudget === null ? "unbounded" : String(Math.max(0, goal.tokenBudget - goal.tokensUsed)),
+  elapsed: formatElapsed(now - goal.createdAt),
+})
 
-export const systemBlock = (goal: Goal, protocol: string) =>
-  ["<goal>", "Goal ativo nesta sessão:", goal.objective, "</goal>", "", protocol].join("\n")
+export const continuationPrompt = (goal: Goal, now: number) => render(templates.continuation, values(goal, now))
+export const budgetLimitPrompt = (goal: Goal, now: number) => render(templates.budgetLimit, values(goal, now))
+export const objectiveUpdatedPrompt = (goal: Goal, now: number) => render(templates.objectiveUpdated, values(goal, now))
+export const sessionContext = (goal: Goal, now: number) => render(templates.sessionContext, values(goal, now))
 
-export const startPrompt = (goal: Goal) =>
-  [
-    "Um goal foi definido para esta sessão:",
-    "",
-    goal.objective,
-    "",
-    "Comece agora. Siga o protocolo do goal no system prompt e continue até concluir, travar ou esgotar o orçamento.",
-  ].join("\n")
-
-export const continuePrompt = (goal: Goal) =>
-  [
-    `Continue o goal ativo (${turns(goal)}).`,
-    "Execute e verifique o próximo passo concreto.",
-    'Quando cada requisito tiver evidência, chame goal_update com status "complete". Se tudo depender do usuário, use status "blocked".',
-  ].join("\n")
-
-export const wrapUpPrompt = (goal: Goal) =>
-  [
-    `O orçamento do goal acabou (${turns(goal)}).`,
-    "Pare o trabalho substantivo. Resuma o progresso, os bloqueios e o próximo passo útil.",
-    "O goal não está concluído.",
-  ].join("\n")
+const usage = (goal: Goal) =>
+  goal.tokenBudget === null
+    ? `${formatTokens(goal.tokensUsed)} tokens, no budget`
+    : `${formatTokens(goal.tokensUsed)} / ${formatTokens(goal.tokenBudget)} tokens`
 
 export const statusText = (goal: Goal | undefined, now: number) => {
-  if (!goal) return "Nenhum goal nesta sessão. Defina com /goal [--turns N] <objetivo>."
+  if (!goal) return "No goal is set for this session. Set one with /goal [--tokens N] <objective>."
   return [
-    `Goal ${goal.status} · ${turns(goal)} · ${elapsed(goal, now)}`,
+    `Goal ${goal.status} · ${usage(goal)} · ${formatElapsed(now - goal.createdAt)}`,
     goal.objective,
-    ...(goal.note ? [`Nota: ${goal.note}`] : []),
+    ...(goal.note ? [`Note: ${goal.note}`] : []),
   ].join("\n")
 }

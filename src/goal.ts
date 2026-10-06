@@ -1,13 +1,14 @@
 import { Option, Schema } from "effect"
 
-export const Status = Schema.Literals(["active", "paused", "complete", "blocked", "budget_limited"])
+export const Status = Schema.Literals(["active", "paused", "blocked", "budget_limited", "complete"])
 export type Status = typeof Status.Type
 
 export const Goal = Schema.Struct({
   objective: Schema.String,
   status: Status,
-  turnBudget: Schema.NullOr(Schema.Int),
-  turnsUsed: Schema.Int,
+  tokenBudget: Schema.NullOr(Schema.Int),
+  tokensUsed: Schema.Int,
+  emptyTurns: Schema.Int,
   directory: Schema.String,
   note: Schema.optional(Schema.String),
   createdAt: Schema.Finite,
@@ -18,22 +19,27 @@ export type Goal = typeof Goal.Type
 export const decodeGoal = (value: unknown): Goal | undefined =>
   Option.getOrUndefined(Schema.decodeUnknownOption(Goal)(value))
 
+export const EMPTY_TURN_LIMIT = 3
+
 export type GoalEvent =
-  | { readonly _tag: "Set"; readonly objective: string; readonly turnBudget: number | null; readonly directory: string }
+  | { readonly _tag: "Set"; readonly objective: string; readonly tokenBudget: number | null; readonly directory: string }
+  | { readonly _tag: "Edit"; readonly objective: string }
   | { readonly _tag: "Pause" }
   | { readonly _tag: "Resume" }
   | { readonly _tag: "Clear" }
-  | { readonly _tag: "Complete"; readonly evidence: string }
-  | { readonly _tag: "Block"; readonly reason: string }
-  | { readonly _tag: "TurnEnded"; readonly toolCalls: number }
+  | { readonly _tag: "Complete"; readonly note: string | undefined }
+  | { readonly _tag: "Block"; readonly note: string | undefined }
+  | { readonly _tag: "PauseRequested"; readonly note: string | undefined }
+  | { readonly _tag: "Usage"; readonly tokens: number }
+  | { readonly _tag: "TurnEnded"; readonly activity: boolean; readonly planning: boolean }
   | { readonly _tag: "Interrupted"; readonly reason: "user" | "shutdown" | "superseded" | "inactivity" }
   | { readonly _tag: "Failed"; readonly message: string }
 
 export type GoalEffect =
   | { readonly _tag: "None" }
-  | { readonly _tag: "Start" }
   | { readonly _tag: "Continue" }
   | { readonly _tag: "WrapUp" }
+  | { readonly _tag: "ObjectiveUpdated" }
   | { readonly _tag: "Notify"; readonly text: string }
 
 export interface Step {
@@ -44,7 +50,9 @@ export interface Step {
 const none: GoalEffect = { _tag: "None" }
 const notify = (text: string): GoalEffect => ({ _tag: "Notify", text })
 
-const settled = (status: Status) => status === "complete" || status === "blocked"
+export const isUnfinished = (goal: Goal | undefined) => goal !== undefined && goal.status !== "complete"
+
+const outOfBudget = (goal: Goal) => goal.tokenBudget !== null && goal.tokensUsed >= goal.tokenBudget
 
 export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Step => {
   const unchanged: Step = { goal, effect: none }
@@ -58,53 +66,73 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
       goal: {
         objective: event.objective,
         status: "active",
-        turnBudget: event.turnBudget,
-        turnsUsed: 0,
+        tokenBudget: event.tokenBudget,
+        tokensUsed: 0,
+        emptyTurns: 0,
         directory: event.directory,
         createdAt: now,
         updatedAt: now,
       },
-      effect: { _tag: "Start" },
+      effect: { _tag: "Continue" },
     }
   }
   if (!goal) {
-    return event._tag === "Pause" || event._tag === "Resume" || event._tag === "Clear"
-      ? { goal, effect: notify("Nenhum goal nesta sessão.") }
+    return event._tag === "Pause" || event._tag === "Resume" || event._tag === "Clear" || event._tag === "Edit"
+      ? { goal, effect: notify("No goal is set for this session.") }
       : unchanged
   }
 
   switch (event._tag) {
     case "Clear":
-      return { goal: undefined, effect: notify("Goal removido.") }
+      return { goal: undefined, effect: notify("Goal cleared.") }
+    case "Edit":
+      return goal.status === "active"
+        ? update({ objective: event.objective, emptyTurns: 0 }, { _tag: "ObjectiveUpdated" })
+        : update(
+            { objective: event.objective },
+            notify(`Objective updated. The goal is ${goal.status}; run /goal resume to continue.`),
+          )
     case "Pause":
       return goal.status === "active"
-        ? update({ status: "paused", note: "Pausado pelo usuário." }, notify("Goal pausado."))
-        : { goal, effect: notify(`Goal está ${goal.status}; nada a pausar.`) }
+        ? update({ status: "paused", note: "Paused by the user." }, notify("Goal paused."))
+        : { goal, effect: notify(`The goal is ${goal.status}; nothing to pause.`) }
+    case "PauseRequested":
+      return goal.status === "active" ? update({ status: "paused", note: event.note ?? "Paused at the user's request." }) : unchanged
     case "Resume": {
-      if (goal.status === "active") return { goal, effect: notify("Goal já está ativo.") }
-      if (settled(goal.status)) return { goal, effect: notify(`Goal está ${goal.status}. Defina um novo goal.`) }
-      const outOfBudget = goal.turnBudget !== null && goal.turnsUsed >= goal.turnBudget
-      return outOfBudget
-        ? { goal, effect: notify("Goal sem turnos restantes. Defina um novo goal com --turns maior.") }
-        : update({ status: "active", note: undefined }, { _tag: "Continue" })
+      if (goal.status === "active") return { goal, effect: notify("The goal is already active.") }
+      if (goal.status === "complete") return { goal, effect: notify("The goal is complete. Set a new goal instead.") }
+      if (outOfBudget(goal)) {
+        return { goal, effect: notify("The goal has used its token budget. Set a new goal with a larger --tokens budget.") }
+      }
+      return update({ status: "active", note: undefined, emptyTurns: 0 }, { _tag: "Continue" })
     }
     case "Complete":
-      return goal.status === "active" ? update({ status: "complete", note: event.evidence }) : unchanged
+      return goal.status === "active" || goal.status === "budget_limited"
+        ? update({ status: "complete", note: event.note })
+        : unchanged
     case "Block":
-      return goal.status === "active" ? update({ status: "blocked", note: event.reason }) : unchanged
+      return goal.status === "active" ? update({ status: "blocked", note: event.note }) : unchanged
+    case "Usage": {
+      if (goal.status !== "active" && goal.status !== "budget_limited") return unchanged
+      const tokensUsed = goal.tokensUsed + event.tokens
+      if (goal.status === "active" && goal.tokenBudget !== null && tokensUsed >= goal.tokenBudget) {
+        return update({ tokensUsed, status: "budget_limited", note: "Token budget reached." }, { _tag: "WrapUp" })
+      }
+      return update({ tokensUsed })
+    }
     case "Interrupted":
       return goal.status === "active" && event.reason === "user"
-        ? update({ status: "paused", note: "Interrompido pelo usuário." })
+        ? update({ status: "paused", note: "Interrupted by the user." })
         : unchanged
     case "Failed":
-      return goal.status === "active" ? update({ status: "paused", note: `Turno falhou: ${event.message}` }) : unchanged
+      return goal.status === "active" ? update({ status: "blocked", note: `Turn failed: ${event.message}` }) : unchanged
     case "TurnEnded": {
-      if (goal.status !== "active") return unchanged
-      const turnsUsed = goal.turnsUsed + 1
-      if (goal.turnBudget !== null && turnsUsed >= goal.turnBudget) {
-        return update({ turnsUsed, status: "budget_limited", note: "Orçamento de turnos esgotado." }, { _tag: "WrapUp" })
-      }
-      return update({ turnsUsed }, event.toolCalls > 0 ? { _tag: "Continue" } : none)
+      if (goal.status !== "active" || event.planning) return unchanged
+      if (event.activity) return update({ emptyTurns: 0 }, { _tag: "Continue" })
+      const emptyTurns = goal.emptyTurns + 1
+      return emptyTurns >= EMPTY_TURN_LIMIT
+        ? update({ emptyTurns, status: "blocked", note: `${EMPTY_TURN_LIMIT} consecutive turns produced no output.` })
+        : update({ emptyTurns }, { _tag: "Continue" })
     }
   }
 }

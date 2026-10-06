@@ -7,12 +7,16 @@ test.each([
   ["pause", { _tag: "Pause" }],
   ["RESUME", { _tag: "Resume" }],
   ["clear", { _tag: "Clear" }],
-  ["fix the flaky auth tests", { _tag: "Set", objective: "fix the flaky auth tests", turnBudget: null }],
-  ["--turns 20 migrate to vitest", { _tag: "Set", objective: "migrate to vitest", turnBudget: 20 }],
-  ["--turns=5 shrink the bundle", { _tag: "Set", objective: "shrink the bundle", turnBudget: 5 }],
-  ["--turns 0 x", { _tag: "Invalid", message: '--turns precisa de um inteiro positivo, recebeu "0".' }],
-  ["--turns abc x", { _tag: "Invalid", message: '--turns precisa de um inteiro positivo, recebeu "abc".' }],
-  ["--turns 3", { _tag: "Invalid", message: "Escreva o objetivo depois de --turns N." }],
+  ["edit only fix the login test", { _tag: "Edit", objective: "only fix the login test" }],
+  ["edit", { _tag: "Invalid", message: "Write the new objective after /goal edit." }],
+  ["editorial pass on the docs", { _tag: "Set", objective: "editorial pass on the docs", tokenBudget: null }],
+  ["fix the flaky auth tests", { _tag: "Set", objective: "fix the flaky auth tests", tokenBudget: null }],
+  ["--tokens 50000 migrate to vitest", { _tag: "Set", objective: "migrate to vitest", tokenBudget: 50_000 }],
+  ["--tokens=250K shrink the bundle", { _tag: "Set", objective: "shrink the bundle", tokenBudget: 250_000 }],
+  ["--tokens 1.5m port the parser", { _tag: "Set", objective: "port the parser", tokenBudget: 1_500_000 }],
+  ["--tokens 0 x", { _tag: "Invalid", message: '--tokens needs a positive number such as 50000, 250K or 1.5M, got "0".' }],
+  ["--tokens abc x", { _tag: "Invalid", message: '--tokens needs a positive number such as 50000, 250K or 1.5M, got "abc".' }],
+  ["--tokens 3K", { _tag: "Invalid", message: "Write the objective after --tokens N." }],
 ] as const)("parseCommand(%p)", (input, expected) => {
   expect(parseCommand(input)).toEqual(expected)
 })

@@ -1,32 +1,33 @@
 ---
 name: Goal
-description: Objetivo persistente que mantém a sessão trabalhando entre turnos até um critério verificável. Use quando o usuário pedir para seguir trabalhando até uma condição ficar verdadeira, ou para rodar sem parar até terminar.
+description: Persistent, audited objective that keeps the session working across turns until a verifiable end state. Use when the user asks to keep working until a condition holds, or to run without stopping until done.
 ---
 
 # Goal
 
-Um goal é um contrato de conclusão: o resultado, a prova de que terminou e o que não pode regredir. O plugin `goal` guarda esse contrato por sessão e abre um novo turno sempre que o anterior termina tendo usado ferramentas, até o goal sair de `active`.
+A goal is a completion contract: the end state, the evidence that proves it, and what must not regress. The `goal` plugin stores it per session and starts a new turn after each one ends, until the goal leaves `active`. Each continuation turn carries the full instructions, including the completion and blocked audits.
 
-## Criar
+## Create
 
-Crie um goal quando o usuário pedir trabalho contínuo até uma condição. Antes de chamar `goal_create`, reescreva o pedido como um objetivo auditável:
+Create a goal only when the user explicitly asks for continued work toward a condition. Before calling `goal_create`, rewrite the request as an auditable objective:
 
-- **Resultado.** O que precisa ser verdade no fim.
-- **Prova.** O comando, teste, arquivo ou medição que mostra o resultado.
-- **Restrições.** O que não pode regredir no caminho.
+- **End state.** What must be true at the end.
+- **Evidence.** The command, test, file, or measurement that shows it.
+- **Constraints.** What must not regress along the way.
 
-Se a prova não couber numa frase, pergunte ao usuário antes de criar. O usuário também cria o goal com `/goal [--turns N] <objetivo>`.
+If the evidence does not fit in one sentence, ask the user before creating the goal. Set `token_budget` only when the user asks for a budget.
 
-## Perseguir
+The user controls goals with `/goal`:
 
-Em cada turno, escolha o próximo passo concreto que aproxima o resultado, execute e verifique. Feche o turno com uma linha de progresso: o que mudou, a evidência e o próximo passo.
+```text
+/goal [--tokens N] <objective>   set or replace the goal (N accepts 50000, 250K, 1.5M)
+/goal                            show status and usage
+/goal edit <objective>           change the objective, keeping usage
+/goal pause | resume | clear
+```
 
-Um turno que termina sem chamada de ferramenta suspende a continuação automática. Use isso para esperar o usuário: faça a pergunta e encerre o turno.
+## Finish
 
-## Auditar e encerrar
+Call `goal_update` with `status: "complete"` only after the completion audit passes, with the requirement-by-requirement evidence in `note`. Use `status: "blocked"` only after the same blocker has repeated for three consecutive goal turns, and say which user input or external change it needs. Use `status: "paused"` only when the user asks to pause.
 
-Chame `goal_update` com `status: "complete"` só depois da auditoria. Liste cada requisito do objetivo e, ao lado, a evidência observada neste trabalho: saída de comando, resultado de teste, conteúdo de arquivo. Um requisito sem evidência mantém o goal ativo.
-
-Chame `goal_update` com `status: "blocked"` quando todo caminho restante depender de uma decisão do usuário. Diga qual decisão falta.
-
-Quando o orçamento de turnos acabar, pare o trabalho substantivo e entregue o resumo: progresso, bloqueios e o próximo passo útil. Orçamento esgotado é uma parada, não uma conclusão.
+A token budget that runs out ends the goal as `budget_limited`. Wrap up with progress, blockers, and the next useful step. That is a stop, not a completion.

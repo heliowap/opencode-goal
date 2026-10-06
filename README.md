@@ -1,10 +1,10 @@
 # opencode-goal
 
-`/goal` no estilo do Codex para o OpenCode 2. Um objetivo persistente por sessão que mantém o agente trabalhando entre turnos até a conclusão ser auditada com evidência.
+Codex-style `/goal` for OpenCode 2. A persistent, per-session objective that keeps the agent working across turns until completion is audited against evidence.
 
-## Instalar
+## Install
 
-Requer OpenCode 2 e Bun.
+Requires OpenCode 2 and Bun.
 
 ```sh
 git clone https://github.com/heliowap/opencode-goal.git
@@ -13,39 +13,43 @@ bun install
 ./install.sh
 ```
 
-Reinicie o serviço com `opencode service restart` para carregar o plugin.
+`install.sh` creates two links in `~/.config/opencode`: `plugins/goal.ts` points to `src/index.ts`, and `skills/goal` points to `skill/`. Restart the service with `opencode service restart` to load the plugin.
 
-O `install.sh` cria dois links em `~/.config/opencode`. `plugins/goal.ts` aponta para `src/index.ts` e `skills/goal` aponta para `skill/`.
-
-## Usar
+## Use
 
 ```text
-/goal fazer a suíte de checkout passar sem mudar a API pública
-/goal --turns 20 migrar os testes de Jest para Vitest
-/goal            mostra o goal
+/goal make the checkout suite pass without changing the public API
+/goal --tokens 250K migrate the tests from Jest to Vitest
+/goal                    show status and token usage
+/goal edit <objective>   change the objective, keeping usage
 /goal pause
 /goal resume
 /goal clear
 ```
 
-O agente também cria e encerra goals com as tools `goal_create`, `goal_get` e `goal_update`.
+The agent can also create, read, and finish goals with the `goal_create`, `goal_get`, and `goal_update` tools.
 
-## Como funciona
+## How it works
 
-- O estado fica em `ctx.storage` do plugin, na chave `goal/<sessionID>`, e sobrevive a reinícios.
-- Quando um turno termina (`session.execution.succeeded`) com o goal `active`, o plugin envia uma mensagem sintética que abre o próximo turno.
-- Um turno sem chamada de ferramenta não abre outro. É assim que o agente espera o usuário.
-- O usuário interromper o turno pausa o goal. Uma falha de turno também pausa.
-- Ao esgotar `--turns`, o goal vira `budget_limited` e o agente recebe um último turno para resumir.
-- Com o goal ativo, o protocolo de `skill/SKILL.md` entra no system prompt de cada turno.
+- State lives in the plugin's `ctx.storage` under `goal/<sessionID>` and survives restarts.
+- When a turn ends with the goal `active`, the plugin sends a synthetic continuation message that starts the next turn. The message carries the full instructions: keep the scope intact, work from current evidence, check for progress, and audit completion requirement by requirement before calling `goal_update`.
+- Three consecutive turns with no text and no tool use mark the goal `blocked`, so it cannot spin.
+- The model may mark the goal `blocked` only after the same blocker repeats for three turns, and `paused` only at the user's request.
+- Token usage is counted from each model step (input, output, and reasoning tokens). Crossing `--tokens` marks the goal `budget_limited` and steers the agent to wrap up.
+- A user interrupt pauses the goal. A failed turn blocks it so retries cannot loop.
+- Turns run by the `plan` agent neither count nor continue the goal.
 
-Toda a lógica de estado está no reducer puro `step` em `src/goal.ts`. O `src/index.ts` só traduz eventos do OpenCode para `GoalEvent` e executa o `GoalEffect` devolvido.
+All state rules live in the pure reducer `step` in `src/goal.ts`. `src/index.ts` only translates OpenCode events into `GoalEvent`s and runs the returned `GoalEffect`.
 
-## Limitação conhecida
+## Known limitation
 
-A resposta de `/goal`, `pause`, `resume` e `clear` vai para a fila da sessão como mensagem sintética. Ela aparece na conversa no próximo turno, não na hora.
+Replies to `/goal`, `pause`, `resume`, `edit`, and `clear` are queued as synthetic messages. When the session is idle they show up at the start of the next turn, not immediately.
 
-## Desenvolver
+## Attribution
+
+The prompts in `templates/` and the tool descriptions are adapted from the `/goal` extension in [OpenAI Codex](https://github.com/openai/codex/tree/main/codex-rs/ext/goal), licensed under Apache-2.0. They were modified to use OpenCode tool names. See `NOTICE`.
+
+## Develop
 
 ```sh
 bun test
