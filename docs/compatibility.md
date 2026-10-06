@@ -26,6 +26,11 @@ Every claim here comes from a real `opencode serve` process with no mocked plugi
 | A12c | A location reload leaves a running goal active | ✅ | stored `complete` without user action |
 | A13 | Deleting a session removes its goal | ✅ | no stored goal |
 | A14 | The plugin installed from its package spec works | ✅ | stored `complete`. CI installs `github:<repo>#<commit under test>` |
+| A15 | `goal.get` RPC returns the stored goal and `goal.changed` fires on each transition | ✅ | RPC output equals the `kv` row, events read from `/api/event` |
+| T1 | The line above the input shows running with usage, then paused, then nothing after clear | ✅ | real `opencode` terminal in tmux, screen text above the input |
+| T2 | The line shows active between turns (`plan` agent), blocked, and budget reached | ✅ | same, with the stored status checked first |
+
+T1 and T2 start the real `opencode` terminal client against the canary server inside tmux, then read the line directly above the input with `tmux capture-pane`. CI runs them twice: once with the linked source, and once with the plugin installed from the commit under test (`tui-package`). The installed run caught a bug the linked run could not see. An installed package resolves `solid-js` to its own copy, which the host renderer does not track, so the line stayed empty. The status line now keeps its state in the host's `context.storage.memory` store and imports nothing from `solid-js`.
 
 The canaries found three bugs, each fixed test-first: #1, #2, #3.
 
@@ -56,7 +61,8 @@ The budget is checked when each model step ends, so the step that crosses it and
 
 | Surface | Status |
 |---|---|
-| `/goal` typed in the terminal UI | ⚠️ Not established. Canaries call the same command through `POST /api/session/:id/command`. |
+| `/goal` typed in the terminal UI | ⚠️ Not established. Canaries call the same command through `POST /api/session/:id/command`. The status line in the terminal is verified (T1, T2). |
+| Status line in the desktop and web apps | ⚠️ Not established. They do not load terminal plugins. |
 | Esc in the terminal UI during a running tool | ⚠️ Not established. The API interrupt is verified (A7a). |
 | OpenCode versions other than 2.0.24 | ⚠️ Not established. |
 | Windows | ⚠️ Not established. |

@@ -12,6 +12,7 @@ import {
   sessionContext,
   statusText,
 } from "./prompts.ts"
+import { GoalRpc } from "./rpc.ts"
 
 const CreateInput = Schema.Struct({
   objective: Schema.String.annotate({
@@ -72,6 +73,12 @@ export default Plugin.define({
 
       const load = (sessionID: string) => ctx.storage.get(key(sessionID)).pipe(Effect.map(decodeGoal))
 
+      const rpc = yield* ctx.rpc
+        .register(GoalRpc, {
+          get: (input) => load((input as { sessionID: string }).sessionID).pipe(Effect.map((goal) => ({ goal: goal ?? null }))),
+        })
+        .pipe(Effect.orDie)
+
       const save = (sessionID: string, goal: Goal | undefined) =>
         goal ? ctx.storage.set(key(sessionID), goal) : ctx.storage.remove(key(sessionID))
 
@@ -109,7 +116,12 @@ export default Plugin.define({
           Effect.gen(function* () {
             const before = yield* load(sessionID)
             const next = step(before, event, now())
-            if (next.goal !== before) yield* save(sessionID, next.goal)
+            if (next.goal !== before) {
+              yield* save(sessionID, next.goal)
+              yield* rpc.events
+                .emit("changed", { sessionID, goal: next.goal ?? null })
+                .pipe(Effect.catchCause((cause) => Effect.logError("goal: changed event failed", cause)))
+            }
             if (!options.quiet) yield* perform(sessionID, next.goal, next.effect)
             return next.goal
           }),
