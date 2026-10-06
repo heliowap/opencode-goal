@@ -15,7 +15,9 @@
 - Fail tools with `Tool.Error` and a message the model can act on.
 - Isolate each event handler with `catchCause` so one bad event cannot stop the stream.
 - Act only on goals whose `directory` matches `ctx.location.directory` (`ownedGoal`). Several plugin instances, one per location, see the same events.
-- Synthetic messages: `resume: true` starts a turn, `delivery: "steer"` lands in the running turn, `"queue"` waits for the next one. Route continuations through `drive`, which sends at most one per turn.
+- Synthetic messages: `resume: true` starts a turn, `delivery: "steer"` lands in the running turn, `"queue"` waits for the next one. Send continuations through `queue`, which sends at most one until the next turn starts. Send wrap-ups and objective updates through `steer`, which is never deduplicated.
+- Per-turn bookkeeping (`activity`, `agents`, `resumePending`, `closingSteps`) lives in the per-location `LocationState` on `globalThis`, so a plugin reload keeps turns in flight. Recovery after a restart runs only when that state is fresh.
+- Storage changes go through `transition` too, including deletion: a deleted session is a quiet `Clear`.
 
 ## Persistence
 
@@ -33,10 +35,10 @@ Keep a comment only for a non-obvious why, such as a host quirk. State the obser
 
 ## Tests
 
-- Test behavior: call `step`, `parseCommand`, and the prompt functions the way the plugin does, and assert against literal expected values with `toEqual`.
+- Test behavior: call `step`, `parseCommand`, and the prompt functions the way the plugin does, and assert against literal expected values with `toEqual`. For rendered templates, assert the filled slots with `toContain` on a literal line instead of pinning the whole template text.
 - Every reducer branch has a test. A new event or effect ships with its tests.
 - `bun test` and `bun run typecheck` pass before every commit.
-- `bun run mutation` keeps a 100% mutation score on `src/goal.ts`, `src/command.ts`, `src/prompts.ts`, and `src/badge.ts`. A surviving mutant means a missing test or redundant code: add the test, or delete the code. Do not exclude mutants.
+- `bun run mutation` keeps a 100% mutation score on `src/goal.ts`, `src/command.ts`, `src/prompts.ts`, `src/badge.ts`, and `src/format.ts`. A surviving mutant means a missing test or redundant code: add the test, or delete the code. Do not exclude mutants.
 
 ## Host canaries
 
@@ -46,6 +48,6 @@ Changes to `src/index.ts` or event handling need a host canary in `host/`. A can
 
 For checks against your own running service:
 
-- The service hot-reloads the plugin through the `~/.config/opencode/plugins/goal.ts` symlink, so saving `src/` changes every live session. Running `opencode service restart` from inside an OpenCode session kills that session too.
+- The service hot-reloads the plugin through the `~/.config/opencode/plugins/goal` directory symlink (see README, Develop), so saving `src/` changes every live session. Running `opencode service restart` from inside an OpenCode session kills that session too.
 - `opencode run` sends `/goal ...` as plain text. Invoke the command with `opencode api post /api/session/<id>/command --data '{"name":"goal","text":"..."}'`.
 - Run each scenario in its own temp directory and session. Read the outcome from `opencode session export <id>` and `opencode api get /api/session/<id>/inbox`.

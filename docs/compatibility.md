@@ -14,6 +14,7 @@ Every claim here comes from a real `opencode serve` process with no mocked plugi
 | A4 | Three empty turns block the goal | ✅ | stored `blocked`, `emptyTurns: 3`, exactly 3 model requests |
 | A5 | Crossing a 10K budget limits the goal and steers one wrap-up | ✅ | stored `budget_limited`, `tokensUsed: 16000` with 4,000-token steps, exactly 1 wrap-up |
 | A5b | The step that calls `goal_update` is charged | ✅ after #2 | stored `tokensUsed: 4000` for a one-step goal |
+| A5c | Crossing the budget in a turn already steered by `/goal edit` still steers the wrap-up | ✅ after #9 | stored `budget_limited`, `tokensUsed: 360`, exactly 1 wrap-up request |
 | A6 | `/goal edit` mid-turn steers that turn and keeps usage | ✅ | stored new objective, `tokensUsed: 240`, escaped objective in the steered request |
 | A7a | Interrupt pauses, resume continues | ✅ | stored `paused` with note, then `complete` |
 | A7b | `/goal pause` mid-turn starts no other turn | ✅ | stored `paused`, exactly 2 model requests (the second answers the pause notice) |
@@ -24,7 +25,9 @@ Every claim here comes from a real `opencode serve` process with no mocked plugi
 | A12a | A paused goal survives a server restart unchanged | ✅ | stored goal identical before and after |
 | A12b | An active goal cut off by a server death comes back paused | ✅ after #3 | stored `paused` with recovery note, then `complete` after resume |
 | A12c | A location reload leaves a running goal active | ✅ | stored `complete` without user action |
-| A13 | Deleting a session removes its goal | ✅ | no stored goal |
+| A12d | A location reload during a `plan` turn keeps that turn uncounted | ✅ after #10 | stored `tokensUsed: 0`, `emptyTurns: 0` |
+| A13 | Deleting a session removes its goal | ✅ | no stored goal, exactly one `goal.changed` with `goal: null` |
+| A16 | A goal follows its session to a new directory | ✅ after #11 | stored `directory` updated, then `complete` after resume there |
 | A14 | The plugin installed from its package spec works | ✅ | stored `complete`. CI installs `github:<repo>#<commit under test>` |
 | A15 | `goal.get` RPC returns the stored goal and `goal.changed` fires on each transition | ✅ | RPC output equals the `kv` row, events read from `/api/event` |
 | T1 | The line above the input shows running with usage, then paused, then nothing after clear | ✅ | real `opencode` terminal in tmux, screen text above the input |
@@ -32,7 +35,7 @@ Every claim here comes from a real `opencode serve` process with no mocked plugi
 
 T1 and T2 start the real `opencode` terminal client against the canary server inside tmux, then read the line directly above the input with `tmux capture-pane`. CI runs them twice: once with the linked source, and once with the plugin installed from the commit under test (`tui-package`). The installed run caught a bug the linked run could not see. An installed package resolves `solid-js` to its own copy, which the host renderer does not track, so the line stayed empty. The status line now keeps its state in the host's `context.storage.memory` store and imports nothing from `solid-js`.
 
-The canaries found three bugs, each fixed test-first: #1, #2, #3.
+The canaries found three bugs, each fixed test-first: #1, #2, #3. A later code review found five more, fixed the same way: #9, #10, #11, #12, #13.
 
 ## Live models
 

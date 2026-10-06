@@ -19,7 +19,7 @@ This installs the plugin and adds it to your global `opencode.jsonc`. If `/goal`
 
 | Surface | Status |
 |---|---|
-| OpenCode 2.0.24 | Verified by 21 host canaries against a real `opencode serve`, graded on stored state. They run in CI on every push. |
+| OpenCode 2.0.24 | Verified by 22 host canaries against a real `opencode serve`, graded on stored state. They run in CI on every push. |
 | Status above the input (terminal UI) | Verified by 2 canaries that drive the real `opencode` terminal in tmux and read the screen |
 | Live models | `devin/swe-2`, `gemini-3.8-flash`, and the free `nemotron-3.5-lightning-free` complete real goals, stop at budgets, and survive a restart |
 | `/goal` typed in the terminal UI, desktop and web apps, Windows, other OpenCode versions | Not established |
@@ -90,7 +90,7 @@ OpenCode reloads the plugin when you save files under `src/`.
 ```sh
 bun test                      # unit tests, 100% line and function coverage enforced
 bun run typecheck
-bun run mutation              # mutation testing: every mutant of goal.ts, command.ts, prompts.ts, badge.ts must be killed
+bun run mutation              # mutation testing: every mutant of goal.ts, command.ts, prompts.ts, badge.ts, format.ts must be killed
 bun test ./host               # host canaries: needs `opencode` 2.0.24 on PATH
 LIVE_MODEL="<provider>/<model>" bun test ./host/live/live.test.ts   # live models, uses your provider config
 ```
