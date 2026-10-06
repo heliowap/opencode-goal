@@ -9,8 +9,11 @@ const REPO = resolve(import.meta.dir, "../..")
 const PASSWORD = "host-canary"
 
 export interface HostOptions {
-  readonly script: Script
+  readonly script?: Script
   readonly pluginSpec?: string
+  readonly model?: { readonly providerID: string; readonly id: string; readonly variant?: string }
+  readonly providers?: Record<string, unknown>
+  readonly allowAll?: boolean
 }
 
 export interface Session {
@@ -33,6 +36,7 @@ export class Host {
     readonly root: string,
     readonly project: string,
     readonly fixture: Fixture,
+    readonly model: NonNullable<HostOptions["model"]>,
     private readonly base: string,
     private readonly env: Record<string, string>,
     private process: ReturnType<typeof Bun.spawn>,
@@ -46,11 +50,12 @@ export class Host {
     for (const dir of [project, config, ...["home", "data", "cache", "state"].map((d) => join(root, d))]) {
       await mkdir(dir, { recursive: true })
     }
-    const fixture = startFixture(options.script)
+    const fixture = startFixture(options.script ?? (() => ({ status: 500, error: "no fixture script in a live run" })))
+    const model = options.model ?? { providerID: "fixture", id: "test" }
     await writeFile(
       join(config, "opencode.jsonc"),
       JSON.stringify({
-        model: "fixture/test",
+        model: `${model.providerID}/${model.id}`,
         providers: {
           fixture: {
             name: "Fixture",
@@ -58,8 +63,10 @@ export class Host {
             settings: { baseURL: fixture.url, apiKey: "fixture" },
             models: { test: { name: "Fixture model" } },
           },
+          ...options.providers,
         },
         ...(options.pluginSpec && { plugins: [options.pluginSpec] }),
+        ...(options.allowAll && { permissions: [{ action: "*", resource: "*", effect: "allow" }] }),
       }),
     )
     if (!options.pluginSpec) {
@@ -80,7 +87,7 @@ export class Host {
     delete env.BUN_BE_BUN
     const port = freePort()
     const logs: string[] = []
-    const host = new Host(root, project, fixture, `http://127.0.0.1:${port}`, env, Host.spawn(env, project, port, logs), logs)
+    const host = new Host(root, project, fixture, model, `http://127.0.0.1:${port}`, env, Host.spawn(env, project, port, logs), logs)
     await host.ready()
     return host
   }
@@ -128,7 +135,8 @@ export class Host {
         ...(body !== undefined && { "content-type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
-    })
+      timeout: false,
+    } as RequestInit)
   }
 
   async json(method: string, path: string, body?: unknown): Promise<unknown> {
@@ -141,7 +149,7 @@ export class Host {
   async session(agent = "build"): Promise<Session> {
     const created = (await this.json("POST", "/api/session", {
       agent,
-      model: { providerID: "fixture", id: "test" },
+      model: this.model,
       location: { directory: this.project },
     })) as { id?: string; data?: { id: string } }
     return { id: created.id ?? created.data!.id }
@@ -180,6 +188,18 @@ export class Host {
       const seen = this.fixture.requests.length
       await sleep(quietMs)
       if (this.fixture.requests.length === seen) return
+    }
+    throw new Error(`session ${session.id} did not settle within ${timeoutMs} ms`)
+  }
+
+  async settleLive(session: Session, quietMs = 4_000, timeoutMs = 600_000) {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      await this.json("POST", `/api/experimental/session/${session.id}/wait`)
+      const seen = (await this.messages(session)).length
+      await sleep(quietMs)
+      const messages = await this.messages(session)
+      if (messages.length === seen && messages.at(-1)?.type === "idle") return
     }
     throw new Error(`session ${session.id} did not settle within ${timeoutMs} ms`)
   }

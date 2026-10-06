@@ -15,6 +15,16 @@ opencode plugin add github:heliowap/opencode-v2-goal-plugin
 
 This installs the plugin and adds it to your global `opencode.jsonc`. If `/goal` does not show up, run `opencode service restart`. Update with `opencode plugin update` and uninstall with `opencode plugin remove github:heliowap/opencode-v2-goal-plugin`.
 
+## Compatibility
+
+| Surface | Status |
+|---|---|
+| OpenCode 2.0.24 | Verified by 18 host canaries against a real `opencode serve`, graded on stored state. They run in CI on every push. |
+| Live models | `devin/swe-2`, `gemini-3.8-flash`, and the free `nemotron-3.5-lightning-free` complete real goals, stop at budgets, and survive a restart |
+| Terminal UI input, Windows, other OpenCode versions | Not established |
+
+Details, session evidence, and what is not proven: [`docs/compatibility.md`](docs/compatibility.md).
+
 ## Use
 
 ```text
@@ -64,6 +74,8 @@ ln -sfn "$PWD/src/index.ts" ~/.config/opencode/plugins/goal.ts
 OpenCode reloads the plugin when you save files under `src/`.
 
 ```sh
-bun test
+bun test                      # unit tests, 100% line and function coverage enforced
 bun run typecheck
+bun test ./host               # host canaries: needs `opencode` 2.0.24 on PATH
+LIVE_MODEL="<provider>/<model>" bun test ./host/live/live.test.ts   # live models, uses your provider config
 ```

@@ -36,9 +36,13 @@ Keep a comment only for a non-obvious why, such as a host quirk. State the obser
 - Every reducer branch has a test. A new event or effect ships with its tests.
 - `bun test` and `bun run typecheck` pass before every commit.
 
-## End-to-end checks
+## Host canaries
 
-Unit tests cannot see the host. Changes to `src/index.ts` or event handling need a real session:
+Changes to `src/index.ts` or event handling need a host canary in `host/`. A canary starts a real `opencode serve` through `host/harness/host.ts` with a scripted fixture provider (`host/harness/fixture.ts`). Grade it on `host.stored(session)`, files on disk, and `host.fixture.agentRequests()`. Assert exact counts and values. A bug fix lands with a canary or unit test that fails before the fix. Add new canary files to the CI matrix in `.github/workflows/ci.yml`.
+
+## Manual end-to-end checks
+
+For checks against your own running service:
 
 - The service hot-reloads the plugin through the `~/.config/opencode/plugins/goal.ts` symlink, so saving `src/` changes every live session. Running `opencode service restart` from inside an OpenCode session kills that session too.
 - `opencode run` sends `/goal ...` as plain text. Invoke the command with `opencode api post /api/session/<id>/command --data '{"name":"goal","text":"..."}'`.
