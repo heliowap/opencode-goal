@@ -79,7 +79,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [lifecycle, budget, controls, failure, persistence, package]
+        suite: [lifecycle, budget, controls, failure, persistence, package, status, tui]
     env:
       GOAL_HOST_KEEP: "1"
       GOAL_PLUGIN_SPEC: ${{ matrix.suite == 'package' && format('github:{0}#{1}', github.repository, github.event.pull_request.head.sha || github.sha) || '' }}
@@ -100,6 +100,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: npm install --global @opencode/cli@${{ env.OPENCODE_VERSION }}
       - run: opencode --version
+      - if: matrix.suite == 'tui'
+        run: sudo apt-get install -y tmux
       - run: mkdir -p "$RUNNER_TEMP/hosts"
       - run: bun test ./host/${{ matrix.suite }}.test.ts
         env:
