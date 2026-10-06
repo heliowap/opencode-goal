@@ -19,10 +19,12 @@ export type Goal = typeof Goal.Type
 export const decodeGoal = (value: unknown): Goal | undefined =>
   Option.getOrUndefined(Schema.decodeUnknownOption(Goal)(value))
 
-export const EMPTY_TURN_LIMIT = 3
+const EMPTY_TURN_LIMIT = 3
 
 export type GoalEvent =
   | { readonly _tag: "Set"; readonly objective: string; readonly tokenBudget: number | null; readonly directory: string }
+  | { readonly _tag: "Create"; readonly objective: string; readonly tokenBudget: number | null; readonly directory: string }
+  | { readonly _tag: "Moved"; readonly directory: string }
   | { readonly _tag: "Edit"; readonly objective: string }
   | { readonly _tag: "Pause" }
   | { readonly _tag: "Resume" }
@@ -43,7 +45,7 @@ export type GoalEffect =
   | { readonly _tag: "ObjectiveUpdated" }
   | { readonly _tag: "Notify"; readonly text: string }
 
-export interface Step {
+interface Step {
   readonly goal: Goal | undefined
   readonly effect: GoalEffect
 }
@@ -51,7 +53,7 @@ export interface Step {
 const none: GoalEffect = { _tag: "None" }
 const notify = (text: string): GoalEffect => ({ _tag: "Notify", text })
 
-export const isUnfinished = (goal: Goal | undefined) => goal !== undefined && goal.status !== "complete"
+export const isUnfinished = (goal: Goal | undefined): goal is Goal => goal !== undefined && goal.status !== "complete"
 
 const outOfBudget = (goal: Goal) => goal.tokenBudget !== null && goal.tokensUsed >= goal.tokenBudget
 
@@ -68,7 +70,7 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
     effect,
   })
 
-  if (event._tag === "Set") {
+  if (event._tag === "Set" || (event._tag === "Create" && !isUnfinished(goal))) {
     return {
       goal: {
         objective: event.objective,
@@ -80,7 +82,7 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
         createdAt: now,
         updatedAt: now,
       },
-      effect: { _tag: "Continue" },
+      effect: event._tag === "Set" ? { _tag: "Continue" } : none,
     }
   }
   if (!goal) {
@@ -90,6 +92,10 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
   }
 
   switch (event._tag) {
+    case "Create":
+      return unchanged
+    case "Moved":
+      return update({ directory: event.directory })
     case "Clear":
       return { goal: undefined, effect: notify("Goal cleared.") }
     case "Edit": {
@@ -120,12 +126,21 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
     case "Block":
       return goal.status === "active" ? update({ status: "blocked", note: event.note }) : unchanged
     case "Usage": {
-      const tokensUsed = goal.tokensUsed + event.tokens
-      if (goal.status !== "active" && goal.status !== "budget_limited") return event.closing ? update({ tokensUsed }) : unchanged
-      if (goal.status === "active" && goal.tokenBudget !== null && tokensUsed >= goal.tokenBudget) {
-        return update({ tokensUsed, status: "budget_limited", note: "Token budget reached." }, { _tag: "WrapUp" })
+      const charged = { ...goal, tokensUsed: goal.tokensUsed + event.tokens }
+      const crossed = outOfBudget(charged)
+      const limited = { tokensUsed: charged.tokensUsed, status: "budget_limited", note: "Token budget reached." } as const
+      switch (goal.status) {
+        case "active":
+          return crossed ? update(limited, { _tag: "WrapUp" }) : update({ tokensUsed: charged.tokensUsed })
+        case "budget_limited":
+          return update({ tokensUsed: charged.tokensUsed })
+        case "paused":
+          if (!event.closing) return unchanged
+          return crossed ? update(limited) : update({ tokensUsed: charged.tokensUsed })
+        case "blocked":
+        case "complete":
+          return event.closing ? update({ tokensUsed: charged.tokensUsed }) : unchanged
       }
-      return update({ tokensUsed })
     }
     case "Interrupted":
       return goal.status === "active" && event.reason === "user"

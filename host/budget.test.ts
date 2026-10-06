@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { afterToolResult, BUDGET_LIMIT, CONTINUATION, count, mentions } from "./harness/fixture.ts"
+import { afterToolResult, BUDGET_LIMIT, CONTINUATION, count, mentions, OBJECTIVE_UPDATED } from "./harness/fixture.ts"
 import { Host } from "./harness/host.ts"
 
 const TIMEOUT = 120_000
@@ -51,6 +51,28 @@ describe("token budget", () => {
       await host.settle(session)
 
       expect(host.stored(session)).toMatchObject({ status: "complete", tokensUsed: 4_000 })
+    },
+    TIMEOUT,
+  )
+
+  test(
+    "A5c crossing the budget right after a /goal edit still steers the wrap-up",
+    async () => {
+      host = await Host.start({
+        script: (request) => {
+          if (mentions(request, BUDGET_LIMIT)) return { text: "Wrap-up summary." }
+          if (mentions(request, OBJECTIVE_UPDATED)) return { text: "Steered." }
+          return { text: "Working.", delayMs: 3_000 }
+        },
+      })
+      const session = await host.session()
+      await host.goal(session, "--tokens 200 old objective")
+      await host.until(() => host!.fixture.agentRequests().length === 1)
+      await host.goal(session, "edit new objective")
+      await host.settle(session)
+
+      expect(host.stored(session)).toMatchObject({ objective: "new objective", status: "budget_limited", tokensUsed: 360 })
+      expect(host.fixture.agentRequests().filter((request) => mentions(request, BUDGET_LIMIT))).toHaveLength(1)
     },
     TIMEOUT,
   )

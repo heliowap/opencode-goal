@@ -85,9 +85,54 @@ describe("persistence", () => {
       await host.until(() => host!.stored(session) !== undefined)
       await host.goal(session, "pause")
       await host.settle(session)
+      const events = host.events((type) => type === "rpc.goal.changed")
+      await Bun.sleep(500)
       await host.remove(session)
       await host.until(() => host!.stored(session) === undefined)
-      expect(host.stored(session)).toBeUndefined()
+      await host.until(() => events.seen.length > 0)
+      events.stop()
+      expect(events.seen.map((event) => event.data)).toEqual([{ sessionID: session.id, goal: null }])
+    },
+    TIMEOUT,
+  )
+
+  test(
+    "A12d a location reload during a plan-agent turn still keeps that turn uncounted",
+    async () => {
+      host = await Host.start({ script: () => ({ text: "Here is a plan.", delayMs: 3_000 }) })
+      const session = await host.session("plan")
+      await host.goal(session, "plan across a reload")
+      await host.until(() => host!.fixture.agentRequests().length >= 1)
+      await host.json("POST", "/api/location/reload")
+      await host.settle(session)
+
+      expect(host.stored(session)).toMatchObject({ status: "active", tokensUsed: 0, emptyTurns: 0 })
+    },
+    TIMEOUT,
+  )
+
+  test(
+    "A16 a goal follows its session to a new directory and keeps running there",
+    async () => {
+      host = await Host.start({
+        script: (request) => {
+          if (afterToolResult(request)) return { text: "Closing." }
+          return count(request, CONTINUATION) >= 2 ? complete : { text: "Step.", delayMs: 1_500 }
+        },
+      })
+      const session = await host.session()
+      await host.goal(session, "move with me")
+      await host.until(() => host!.fixture.agentRequests().length === 1)
+      await host.goal(session, "pause")
+      await host.settle(session)
+      const elsewhere = `${host.project}-moved`
+      await Bun.$`mkdir -p ${elsewhere}`
+      await host.json("POST", `/api/session/${session.id}/move`, { directory: elsewhere })
+      await host.until(() => host!.stored(session)?.directory === elsewhere)
+
+      await host.goal(session, "resume")
+      await host.settle(session)
+      expect(host.stored(session)).toMatchObject({ status: "complete", directory: elsewhere })
     },
     TIMEOUT,
   )

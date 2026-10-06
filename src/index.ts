@@ -2,12 +2,12 @@ import { Plugin } from "@opencode/plugin/effect"
 import { Tool } from "@opencode/schema/tool"
 import { Effect, Schema, Semaphore, Stream } from "effect"
 import { parseCommand } from "./command.ts"
+import { formatTokens } from "./format.ts"
 import { decodeGoal, isUnfinished, step, type Goal, type GoalEffect, type GoalEvent } from "./goal.ts"
 import {
   budgetLimitPrompt,
   COMMAND_HELP,
   continuationPrompt,
-  formatTokens,
   objectiveUpdatedPrompt,
   sessionContext,
   statusText,
@@ -47,13 +47,38 @@ const toolInput = <S extends Schema.Top & { readonly DecodingServices: never }>(
 
 const createInput = toolInput(CreateInput)
 const updateInput = toolInput(UpdateInput)
+const getInput = toolInput(Schema.Struct({}))
 
 const PLANNING_AGENTS = new Set(["plan"])
 
-// Survives plugin reloads inside one server process, but not a process restart.
-const RECOVERED_LOCATIONS: Set<string> = ((globalThis as Record<symbol, Set<string> | undefined>)[
-  Symbol.for("opencode-v2-goal-plugin/recovered-locations")
-] ??= new Set())
+const KEY_PREFIX = "goal/"
+
+// Per-turn bookkeeping for one location. It lives on globalThis so a plugin reload inside a running
+// server keeps the turns already in flight, while a process restart starts clean.
+interface LocationState {
+  readonly activity: Set<string>
+  readonly agents: Map<string, string>
+  readonly resumePending: Set<string>
+  readonly closingSteps: Map<string, string>
+}
+
+const LOCATIONS: Map<string, LocationState> = ((globalThis as Record<symbol, Map<string, LocationState> | undefined>)[
+  Symbol.for("opencode-v2-goal-plugin/locations")
+] ??= new Map())
+
+const locationState = (directory: string) => {
+  const existing = LOCATIONS.get(directory)
+  if (existing) return { state: existing, fresh: false }
+  const state: LocationState = { activity: new Set(), agents: new Map(), resumePending: new Set(), closingSteps: new Map() }
+  LOCATIONS.set(directory, state)
+  return { state, fresh: true }
+}
+
+const updateEvents = {
+  complete: (note) => ({ _tag: "Complete", note }),
+  blocked: (note) => ({ _tag: "Block", note }),
+  paused: (note) => ({ _tag: "PauseRequested", note }),
+} satisfies Record<typeof UpdateInput.Type.status, (note: string | undefined) => GoalEvent>
 
 const toolError = (error: unknown) =>
   error instanceof Tool.Error ? error : new Tool.Error({ message: `goal: ${String(error)}` })
@@ -63,11 +88,9 @@ export default Plugin.define({
   effect: (ctx) =>
     Effect.gen(function* () {
       const lock = yield* Semaphore.make(1)
-      const activity = new Set<string>()
-      const agents = new Map<string, string>()
-      const resumePending = new Set<string>()
-      const closingSteps = new Map<string, string>()
-      const key = (sessionID: string) => `goal/${sessionID}`
+      const { state, fresh } = locationState(ctx.location.directory)
+      const { activity, agents, resumePending, closingSteps } = state
+      const key = (sessionID: string) => `${KEY_PREFIX}${sessionID}`
       const now = () => Date.now()
       const planning = (sessionID: string) => PLANNING_AGENTS.has(agents.get(sessionID) ?? "")
 
@@ -90,24 +113,29 @@ export default Plugin.define({
       const notice = (sessionID: string, text: string) =>
         send(sessionID, `[goal] ${text}`, { resume: false, delivery: "queue" })
 
-      const drive = (sessionID: string, text: string, delivery: "steer" | "queue") =>
+      // A queued continuation starts the next turn, so one is enough until that turn starts.
+      // Steers land in the running turn and are never deduplicated.
+      const queue = (sessionID: string, text: string) =>
         resumePending.has(sessionID)
           ? Effect.void
-          : send(sessionID, text, { resume: true, delivery }).pipe(
+          : send(sessionID, text, { resume: true, delivery: "queue" }).pipe(
               Effect.tap(() => Effect.sync(() => resumePending.add(sessionID))),
             )
 
+      const steer = (sessionID: string, text: string) => send(sessionID, text, { resume: true, delivery: "steer" })
+
       const perform = (sessionID: string, goal: Goal | undefined, effect: GoalEffect) => {
-        if (effect._tag === "None") return Effect.void
-        if (effect._tag === "Notify") return notice(sessionID, effect.text)
-        if (!goal) return Effect.void
         switch (effect._tag) {
+          case "None":
+            return Effect.void
+          case "Notify":
+            return notice(sessionID, effect.text)
           case "Continue":
-            return drive(sessionID, continuationPrompt(goal, now()), "queue")
+            return goal ? queue(sessionID, continuationPrompt(goal, now())) : Effect.void
           case "WrapUp":
-            return drive(sessionID, budgetLimitPrompt(goal, now()), "steer")
+            return goal ? steer(sessionID, budgetLimitPrompt(goal, now())) : Effect.void
           case "ObjectiveUpdated":
-            return drive(sessionID, objectiveUpdatedPrompt(goal, now()), "steer")
+            return goal ? steer(sessionID, objectiveUpdatedPrompt(goal, now())) : Effect.void
         }
       }
 
@@ -123,16 +151,16 @@ export default Plugin.define({
                 .pipe(Effect.catchCause((cause) => Effect.logError("goal: changed event failed", cause)))
             }
             if (!options.quiet) yield* perform(sessionID, next.goal, next.effect)
-            return next.goal
+            return { before, goal: next.goal }
           }),
         )
 
       const ownedGoal = (sessionID: string) =>
         load(sessionID).pipe(Effect.map((goal) => (goal?.directory === ctx.location.directory ? goal : undefined)))
 
-      const onEvent = (sessionID: string, event: GoalEvent) =>
+      const onEvent = (sessionID: string, event: GoalEvent, options: { readonly quiet?: boolean } = {}) =>
         ownedGoal(sessionID).pipe(
-          Effect.flatMap((goal) => (goal ? Effect.asVoid(transition(sessionID, event)) : Effect.void)),
+          Effect.flatMap((goal) => (goal ? Effect.asVoid(transition(sessionID, event, options)) : Effect.void)),
         )
 
       yield* ctx.command.transform((editor) => {
@@ -148,7 +176,10 @@ export default Plugin.define({
                 return load(sessionID).pipe(Effect.flatMap((goal) => notice(sessionID, statusText(goal, now()))))
               case "Set":
                 return Effect.asVoid(transition(sessionID, { ...command, directory: ctx.location.directory }))
-              default:
+              case "Edit":
+              case "Pause":
+              case "Resume":
+              case "Clear":
                 return Effect.asVoid(transition(sessionID, command))
             }
           },
@@ -166,22 +197,17 @@ export default Plugin.define({
           execute: (raw, context) =>
             Effect.gen(function* () {
               const input = yield* createInput.decode(raw)
-              const existing = yield* load(context.sessionID)
-              if (isUnfinished(existing)) {
+              const { before, goal } = yield* transition(context.sessionID, {
+                _tag: "Create",
+                objective: input.objective,
+                tokenBudget: input.token_budget ?? null,
+                directory: ctx.location.directory,
+              })
+              if (isUnfinished(before)) {
                 return yield* new Tool.Error({
-                  message: `This session already has an unfinished goal (${existing!.status}). Finish it, or ask the user to replace it with /goal <objective>.`,
+                  message: `This session already has an unfinished goal (${before.status}). Finish it, or ask the user to replace it with /goal <objective>.`,
                 })
               }
-              const goal = yield* transition(
-                context.sessionID,
-                {
-                  _tag: "Set",
-                  objective: input.objective,
-                  tokenBudget: input.token_budget ?? null,
-                  directory: ctx.location.directory,
-                },
-                { quiet: true },
-              )
               return { content: `Goal created.\n${statusText(goal, now())}` }
             }).pipe(Effect.mapError(toolError)),
         })
@@ -189,7 +215,7 @@ export default Plugin.define({
           name: "get",
           description:
             "Get the session's goal: objective, status, token usage, remaining token budget, and elapsed time. Also returns the /goal command syntax the user can type.",
-          input: { type: "object", properties: {}, additionalProperties: false },
+          input: getInput.input,
           options: { namespace: "goal", codemode: false },
           execute: (_input, context) =>
             load(context.sessionID).pipe(
@@ -211,15 +237,8 @@ export default Plugin.define({
           execute: (raw, context) =>
             Effect.gen(function* () {
               const input = yield* updateInput.decode(raw)
-              const before = yield* load(context.sessionID)
+              const { before, goal } = yield* transition(context.sessionID, updateEvents[input.status](input.note))
               if (!before) return yield* new Tool.Error({ message: "No goal is set for this session." })
-              const event: GoalEvent =
-                input.status === "complete"
-                  ? { _tag: "Complete", note: input.note }
-                  : input.status === "blocked"
-                    ? { _tag: "Block", note: input.note }
-                    : { _tag: "PauseRequested", note: input.note }
-              const goal = yield* transition(context.sessionID, event)
               if (goal?.status !== input.status) {
                 return yield* new Tool.Error({
                   message: `The goal is ${goal?.status ?? "cleared"} and cannot move to ${input.status}.`,
@@ -273,8 +292,10 @@ export default Plugin.define({
             return onEvent(event.data.sessionID, { _tag: "Interrupted", reason: event.data.reason })
           case "session.execution.failed":
             return onEvent(event.data.sessionID, { _tag: "Failed", message: event.data.error.message })
+          case "session.moved":
+            return onEvent(event.data.sessionID, { _tag: "Moved", directory: event.data.location.directory })
           case "session.deleted":
-            return ctx.storage.remove(key(event.data.sessionID))
+            return onEvent(event.data.sessionID, { _tag: "Clear" }, { quiet: true })
           default:
             return Effect.void
         }
@@ -283,19 +304,18 @@ export default Plugin.define({
       const recover = Effect.gen(function* () {
         let after: string | undefined
         do {
-          const page = yield* ctx.storage.scan({ prefix: "goal/", after, limit: 100 })
+          const page = yield* ctx.storage.scan({ prefix: KEY_PREFIX, after, limit: 100 })
           for (const entry of page.entries) {
             const goal = decodeGoal(entry.value)
             if (goal?.status === "active" && goal.directory === ctx.location.directory) {
-              yield* transition(entry.key.slice("goal/".length), { _tag: "Recovered" }, { quiet: true })
+              yield* transition(entry.key.slice(KEY_PREFIX.length), { _tag: "Recovered" }, { quiet: true })
             }
           }
           after = page.next
         } while (after)
       })
 
-      if (!RECOVERED_LOCATIONS.has(ctx.location.directory)) {
-        RECOVERED_LOCATIONS.add(ctx.location.directory)
+      if (fresh) {
         yield* recover.pipe(Effect.catchCause((cause) => Effect.logError("goal: recovery failed", cause)))
       }
 

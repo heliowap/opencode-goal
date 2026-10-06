@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
+import { formatTokens } from "../src/format.ts"
 import type { Goal } from "../src/goal.ts"
 import {
   budgetLimitPrompt,
   COMMAND_HELP,
   continuationPrompt,
-  formatTokens,
   objectiveUpdatedPrompt,
   render,
   sessionContext,

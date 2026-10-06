@@ -29,15 +29,21 @@ describe("status for the terminal", () => {
       expect(await host.rpc("get", { sessionID: session.id })).toEqual({ goal: stored })
       await host.until(() => events.seen.some((event) => (event.data as { goal: { status: string } | null }).goal?.status === "paused"))
       events.stop()
-      const statuses = events.seen.map((event) => {
-        const data = event.data as { sessionID: string; goal: { status: string } | null }
-        return [data.sessionID, data.goal?.status]
-      })
-      expect(statuses[0]).toEqual([session.id, "active"])
-      expect(statuses.at(-1)).toEqual([session.id, "paused"])
+      const goals = events.seen.map((event) => event.data as { sessionID: string; goal: { status: string; tokensUsed: number } })
+      expect(goals.map((data) => [data.sessionID, data.goal.status])).toEqual([
+        [session.id, "active"],
+        ...goals.slice(1, -1).map(() => [session.id, "active"]),
+        [session.id, "paused"],
+      ])
+      expect(goals.at(-1)!.goal).toEqual(stored)
 
+      const cleared = host.events((type) => type === "rpc.goal.changed")
+      await Bun.sleep(500)
       await host.goal(session, "clear")
-      await host.until(async () => ((await host!.rpc("get", { sessionID: session.id })) as { goal: unknown }).goal === null)
+      await host.until(() => cleared.seen.length > 0)
+      cleared.stop()
+      expect(cleared.seen.map((event) => event.data)).toEqual([{ sessionID: session.id, goal: null }])
+      expect(await host.rpc("get", { sessionID: session.id })).toEqual({ goal: null })
     },
     TIMEOUT,
   )
