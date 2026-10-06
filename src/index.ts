@@ -60,6 +60,7 @@ export default Plugin.define({
       const activity = new Set<string>()
       const agents = new Map<string, string>()
       const resumePending = new Set<string>()
+      const closingSteps = new Map<string, string>()
       const key = (sessionID: string) => `goal/${sessionID}`
       const now = () => Date.now()
       const planning = (sessionID: string) => PLANNING_AGENTS.has(agents.get(sessionID) ?? "")
@@ -207,8 +208,11 @@ export default Plugin.define({
                   message: `The goal is ${goal?.status ?? "cleared"} and cannot move to ${input.status}.`,
                 })
               }
+              closingSteps.set(context.sessionID, context.messageID)
               const budget =
-                goal.tokenBudget === null ? "" : ` Final usage: ${formatTokens(goal.tokensUsed)} of ${formatTokens(goal.tokenBudget)} tokens.`
+                goal.tokenBudget === null
+                  ? ""
+                  : ` Usage so far: ${formatTokens(goal.tokensUsed)} of ${formatTokens(goal.tokenBudget)} tokens; this step is added when it ends.`
               return { content: `Goal ${goal.status}.${budget}` }
             }).pipe(Effect.mapError(toolError)),
         })
@@ -236,9 +240,11 @@ export default Plugin.define({
               if (event.data.text.trim()) activity.add(event.data.sessionID)
             })
           case "session.step.ended": {
-            const { sessionID, tokens } = event.data
+            const { sessionID, tokens, assistantMessageID } = event.data
             if (planning(sessionID)) return Effect.void
-            return onEvent(sessionID, { _tag: "Usage", tokens: tokens.input + tokens.output + tokens.reasoning })
+            const closing = closingSteps.get(sessionID) === assistantMessageID
+            if (closing) closingSteps.delete(sessionID)
+            return onEvent(sessionID, { _tag: "Usage", tokens: tokens.input + tokens.output + tokens.reasoning, closing })
           }
           case "session.execution.succeeded":
             return onEvent(event.data.sessionID, {

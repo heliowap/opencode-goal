@@ -30,7 +30,7 @@ export type GoalEvent =
   | { readonly _tag: "Complete"; readonly note: string | undefined }
   | { readonly _tag: "Block"; readonly note: string | undefined }
   | { readonly _tag: "PauseRequested"; readonly note: string | undefined }
-  | { readonly _tag: "Usage"; readonly tokens: number }
+  | { readonly _tag: "Usage"; readonly tokens: number; readonly closing: boolean }
   | { readonly _tag: "TurnEnded"; readonly activity: boolean; readonly planning: boolean }
   | { readonly _tag: "Interrupted"; readonly reason: "user" | "shutdown" | "superseded" | "inactivity" }
   | { readonly _tag: "Failed"; readonly message: string }
@@ -119,8 +119,8 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
     case "Block":
       return goal.status === "active" ? update({ status: "blocked", note: event.note }) : unchanged
     case "Usage": {
-      if (goal.status !== "active" && goal.status !== "budget_limited") return unchanged
       const tokensUsed = goal.tokensUsed + event.tokens
+      if (goal.status !== "active" && goal.status !== "budget_limited") return event.closing ? update({ tokensUsed }) : unchanged
       if (goal.status === "active" && goal.tokenBudget !== null && tokensUsed >= goal.tokenBudget) {
         return update({ tokensUsed, status: "budget_limited", note: "Token budget reached." }, { _tag: "WrapUp" })
       }
