@@ -37,8 +37,8 @@ export class Host {
     readonly project: string,
     readonly fixture: Fixture,
     readonly model: NonNullable<HostOptions["model"]>,
-    private readonly base: string,
-    private readonly env: Record<string, string>,
+    readonly base: string,
+    readonly env: Record<string, string>,
     private process: ReturnType<typeof Bun.spawn>,
     private readonly logs: string[],
   ) {}
@@ -71,7 +71,7 @@ export class Host {
     )
     if (!options.pluginSpec) {
       await mkdir(join(config, "plugins"), { recursive: true })
-      await symlink(join(REPO, "src", "index.ts"), join(config, "plugins", "goal.ts"))
+      await symlink(join(REPO, "src"), join(config, "plugins", "goal"))
     }
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
@@ -153,6 +153,38 @@ export class Host {
       location: { directory: this.project },
     })) as { id?: string; data?: { id: string } }
     return { id: created.id ?? created.data!.id }
+  }
+
+  async rpc(method: string, input: unknown): Promise<unknown> {
+    const query = `location[directory]=${encodeURIComponent(this.project)}`
+    const result = (await this.json("POST", `/api/rpc/goal/${method}?${query}`, { input })) as { output?: unknown }
+    return result.output
+  }
+
+  events(filter: (type: string) => boolean): { readonly seen: { type: string; data: unknown }[]; stop(): void } {
+    const seen: { type: string; data: unknown }[] = []
+    const controller = new AbortController()
+    void (async () => {
+      const response = await fetch(this.base + "/api/event", {
+        headers: { authorization: `Basic ${btoa(`opencode:${PASSWORD}`)}`, accept: "text/event-stream" },
+        signal: controller.signal,
+        timeout: false,
+      } as RequestInit)
+      let buffer = ""
+      for await (const chunk of response.body!) {
+        buffer += new TextDecoder().decode(chunk)
+        let end: number
+        while ((end = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, end)
+          buffer = buffer.slice(end + 2)
+          const line = frame.split("\n").find((item) => item.startsWith("data:"))
+          if (!line) continue
+          const event = JSON.parse(line.slice(5)) as { type: string; data: unknown }
+          if (filter(event.type)) seen.push(event)
+        }
+      }
+    })().catch(() => {})
+    return { seen, stop: () => controller.abort() }
   }
 
   goal(session: Session, text: string) {
