@@ -20,7 +20,7 @@ const open = (session: Session) => {
   const spawned = Bun.spawnSync([
     "tmux", "new-session", "-d", "-s", terminal, "-x", "160", "-y", "40", "-c", host!.project,
     "env", ...env.map((name) => `${name}=${host!.env[name]}`), "TERM=xterm-256color",
-    process.env.OPENCODE_BIN ?? "opencode", "--server", host!.base, "--session", session.id,
+    process.env.OPENCODE_BIN ?? "opencode", ...(process.env.GOAL_TUI_DEBUG ? ["--log-level", "debug"] : []), "--server", host!.base, "--session", session.id,
   ])
   expect(spawned.exitCode).toBe(0)
 }

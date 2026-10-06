@@ -1,10 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
-import { createResource, onCleanup, Show } from "solid-js"
 import { goalBadge, type Tone } from "./badge.ts"
-import { decodeGoal } from "./goal.ts"
+import { decodeGoal, type Goal } from "./goal.ts"
 import { GoalRpc } from "./rpc.ts"
+
+// Installed packages resolve `solid-js` to their own copy, which the host renderer does not track.
+// Keep all reactive state in the host's store and import nothing from solid-js.
 
 const color = (context: Context, tone: Tone) =>
   ({
@@ -17,30 +19,36 @@ const color = (context: Context, tone: Tone) =>
 export default Plugin.define({
   id: "goal.status",
   setup(context) {
-    const goal = context.client.rpc(GoalRpc)
+    const rpc = context.client.rpc(GoalRpc)
+    const [goals, update] = context.storage.memory("goals", { initial: {} as Record<string, Goal | null> })
+    const remember = (sessionID: string, goal: unknown) =>
+      update((draft) => {
+        draft[sessionID] = decodeGoal(goal) ?? null
+      })
+
+    const stop = rpc.events.on("changed", (event) => {
+      const data = event.data as { sessionID: string; goal: unknown }
+      remember(data.sessionID, data.goal)
+    })
 
     context.ui.slot({
       append: "session.composer.top",
       render: (slot) => {
-        const [stored, { mutate }] = createResource(
-          () => slot.sessionID,
-          async (sessionID) => decodeGoal(((await goal.get({ sessionID })) as { goal: unknown }).goal),
-        )
-        onCleanup(
-          goal.events.on("changed", (event) => {
-            const data = event.data as { sessionID: string; goal: unknown }
-            if (data.sessionID === slot.sessionID) mutate(decodeGoal(data.goal))
-          }),
-        )
-        const badge = () => goalBadge(stored(), context.data.session.status(slot.sessionID) === "running")
+        void rpc.get({ sessionID: slot.sessionID }).then((result) => remember(slot.sessionID, (result as { goal: unknown }).goal))
+        const badge = () =>
+          goalBadge(goals[slot.sessionID] ?? undefined, context.data.session.status(slot.sessionID) === "running")
         return (
-          <Show when={badge()}>
-            <box flexShrink={0} paddingLeft={1}>
-              <text fg={color(context, badge()!.tone)}>{badge()!.text}</text>
-            </box>
-          </Show>
+          <>
+            {badge() ? (
+              <box flexShrink={0} paddingLeft={1}>
+                <text fg={color(context, badge()!.tone)}>{badge()!.text}</text>
+              </box>
+            ) : null}
+          </>
         )
       },
     })
+
+    return stop
   },
 })
