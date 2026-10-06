@@ -5,6 +5,7 @@ import { parseCommand } from "./command.ts"
 import { decodeGoal, isUnfinished, step, type Goal, type GoalEffect, type GoalEvent } from "./goal.ts"
 import {
   budgetLimitPrompt,
+  COMMAND_HELP,
   continuationPrompt,
   formatTokens,
   objectiveUpdatedPrompt,
@@ -15,7 +16,7 @@ import {
 const CreateInput = Schema.Struct({
   objective: Schema.String.annotate({
     description:
-      "Required. The concrete objective to pursue: the end state, the evidence that proves it, and what must not regress.",
+      "Required. Rewrite the user's request as an auditable objective: the end state, the command, test, file, or measurement that proves it, and what must not regress. If the proof does not fit in one sentence, ask the user before creating the goal.",
   }),
   token_budget: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
     description: "Positive token budget for the goal. Omit unless the user explicitly asks for one.",
@@ -169,11 +170,13 @@ export default Plugin.define({
         editor.add({
           name: "get",
           description:
-            "Get the session's goal: objective, status, token usage, remaining token budget, and elapsed time.",
+            "Get the session's goal: objective, status, token usage, remaining token budget, and elapsed time. Also returns the /goal command syntax the user can type.",
           input: { type: "object", properties: {}, additionalProperties: false },
           options: { namespace: "goal", codemode: false },
           execute: (_input, context) =>
-            load(context.sessionID).pipe(Effect.map((goal) => ({ content: statusText(goal, now()) }))),
+            load(context.sessionID).pipe(
+              Effect.map((goal) => ({ content: `${statusText(goal, now())}\n\n${COMMAND_HELP}` })),
+            ),
         })
         editor.add({
           name: "update",

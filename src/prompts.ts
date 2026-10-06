@@ -45,6 +45,14 @@ const usage = (goal: Goal) =>
     ? `${formatTokens(goal.tokensUsed)} tokens, no budget`
     : `${formatTokens(goal.tokensUsed)} / ${formatTokens(goal.tokenBudget)} tokens`
 
+export const COMMAND_HELP = [
+  "User commands:",
+  "/goal [--tokens N] <objective>   set or replace the goal (N accepts 50000, 250K, 1.5M)",
+  "/goal                            show status and token usage",
+  "/goal edit <objective>           change the objective, keeping usage",
+  "/goal pause | resume | clear",
+].join("\n")
+
 export const statusText = (goal: Goal | undefined, now: number) => {
   if (!goal) return "No goal is set for this session. Set one with /goal [--tokens N] <objective>."
   return [

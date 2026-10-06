@@ -16,7 +16,7 @@ bun install
 ./install.sh
 ```
 
-`install.sh` creates two links in `~/.config/opencode`: `plugins/goal.ts` points to `src/index.ts`, and `skills/goal` points to `skill/`. Restart the service with `opencode service restart` to load the plugin.
+`install.sh` links `~/.config/opencode/plugins/goal.ts` to `src/index.ts`. Restart the service with `opencode service restart` to load the plugin.
 
 ## Use
 
@@ -30,7 +30,7 @@ bun install
 /goal clear
 ```
 
-The agent can also create, read, and finish goals with the `goal_create`, `goal_get`, and `goal_update` tools.
+The agent can also create, read, and finish goals with the `goal_create`, `goal_get`, and `goal_update` tools. `goal_get` also returns the `/goal` syntax, so the agent can answer questions about the command.
 
 ## How it works
 

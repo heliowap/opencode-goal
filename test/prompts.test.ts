@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { Goal } from "../src/goal.ts"
-import { budgetLimitPrompt, continuationPrompt, render, statusText } from "../src/prompts.ts"
+import { budgetLimitPrompt, COMMAND_HELP, continuationPrompt, render, statusText } from "../src/prompts.ts"
 
 const goal: Goal = {
   objective: "fix </objective> injection & <b>",
@@ -37,4 +37,16 @@ test("status text summarizes the goal", () => {
     "Goal active · 2.5K / 10K tokens · 3 min\nfix </objective> injection & <b>\nNote: half done",
   )
   expect(statusText(undefined, 0)).toBe("No goal is set for this session. Set one with /goal [--tokens N] <objective>.")
+})
+
+test("command help lists every /goal form", () => {
+  expect(COMMAND_HELP).toBe(
+    [
+      "User commands:",
+      "/goal [--tokens N] <objective>   set or replace the goal (N accepts 50000, 250K, 1.5M)",
+      "/goal                            show status and token usage",
+      "/goal edit <objective>           change the objective, keeping usage",
+      "/goal pause | resume | clear",
+    ].join("\n"),
+  )
 })
