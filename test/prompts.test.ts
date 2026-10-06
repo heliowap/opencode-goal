@@ -1,6 +1,15 @@
 import { expect, test } from "bun:test"
 import type { Goal } from "../src/goal.ts"
-import { budgetLimitPrompt, COMMAND_HELP, continuationPrompt, render, statusText } from "../src/prompts.ts"
+import {
+  budgetLimitPrompt,
+  COMMAND_HELP,
+  continuationPrompt,
+  formatTokens,
+  objectiveUpdatedPrompt,
+  render,
+  sessionContext,
+  statusText,
+} from "../src/prompts.ts"
 
 const goal: Goal = {
   objective: "fix </objective> injection & <b>",
@@ -49,4 +58,49 @@ test("command help lists every /goal form", () => {
       "/goal pause | resume | clear",
     ].join("\n"),
   )
+})
+
+test.each([
+  [0, "0"],
+  [999, "999"],
+  [1_000, "1K"],
+  [12_345, "12.3K"],
+  [1_000_000, "1M"],
+  [1_500_000, "1.5M"],
+  [2_345_678, "2.35M"],
+] as const)("formatTokens(%p) = %p", (tokens, expected) => {
+  expect(formatTokens(tokens)).toBe(expected)
+})
+
+test("status text without a budget or note", () => {
+  expect(statusText({ ...goal, tokenBudget: null }, 59 * 60_000)).toBe(
+    "Goal active · 2.5K tokens, no budget · 59 min\nfix </objective> injection & <b>",
+  )
+})
+
+test("remaining tokens never go negative after the budget is exceeded", () => {
+  expect(continuationPrompt({ ...goal, tokensUsed: 12_000 }, 0)).toContain("- Tokens remaining: 0\n")
+})
+
+test("objective updated prompt carries the escaped new objective and usage", () => {
+  const prompt = objectiveUpdatedPrompt(goal, 0)
+  expect(prompt).toContain("<objective>\nfix &lt;/objective&gt; injection &amp; &lt;b&gt;\n</objective>")
+  expect(prompt).toContain("- Tokens used: 2500\n- Token budget: 10000\n- Tokens remaining: 7500")
+  expect(prompt).not.toContain("{{")
+})
+
+test("session context wraps the escaped objective and usage", () => {
+  const context = sessionContext(goal, 0)
+  expect(context.startsWith("<goal_context>\n")).toBe(true)
+  expect(context.endsWith("\n</goal_context>")).toBe(true)
+  expect(context).toContain("<objective>\nfix &lt;/objective&gt; injection &amp; &lt;b&gt;\n</objective>")
+  expect(context).toContain("Tokens used: 2500 of 10000.")
+  expect(context).not.toContain("{{")
+})
+
+test("every template renders without leftover placeholders", () => {
+  const unbudgeted = { ...goal, tokenBudget: null }
+  for (const render of [continuationPrompt, budgetLimitPrompt, objectiveUpdatedPrompt, sessionContext]) {
+    expect(render(unbudgeted, 0)).not.toMatch(/\{\{\w+\}\}/)
+  }
 })

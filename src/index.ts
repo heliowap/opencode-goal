@@ -49,6 +49,11 @@ const updateInput = toolInput(UpdateInput)
 
 const PLANNING_AGENTS = new Set(["plan"])
 
+// Survives plugin reloads inside one server process, but not a process restart.
+const RECOVERED_LOCATIONS: Set<string> = ((globalThis as Record<symbol, Set<string> | undefined>)[
+  Symbol.for("opencode-v2-goal-plugin/recovered-locations")
+] ??= new Set())
+
 const toolError = (error: unknown) =>
   error instanceof Tool.Error ? error : new Tool.Error({ message: `goal: ${String(error)}` })
 
@@ -60,6 +65,7 @@ export default Plugin.define({
       const activity = new Set<string>()
       const agents = new Map<string, string>()
       const resumePending = new Set<string>()
+      const closingSteps = new Map<string, string>()
       const key = (sessionID: string) => `goal/${sessionID}`
       const now = () => Date.now()
       const planning = (sessionID: string) => PLANNING_AGENTS.has(agents.get(sessionID) ?? "")
@@ -207,8 +213,11 @@ export default Plugin.define({
                   message: `The goal is ${goal?.status ?? "cleared"} and cannot move to ${input.status}.`,
                 })
               }
+              closingSteps.set(context.sessionID, context.messageID)
               const budget =
-                goal.tokenBudget === null ? "" : ` Final usage: ${formatTokens(goal.tokensUsed)} of ${formatTokens(goal.tokenBudget)} tokens.`
+                goal.tokenBudget === null
+                  ? ""
+                  : ` Usage so far: ${formatTokens(goal.tokensUsed)} of ${formatTokens(goal.tokenBudget)} tokens; this step is added when it ends.`
               return { content: `Goal ${goal.status}.${budget}` }
             }).pipe(Effect.mapError(toolError)),
         })
@@ -236,9 +245,11 @@ export default Plugin.define({
               if (event.data.text.trim()) activity.add(event.data.sessionID)
             })
           case "session.step.ended": {
-            const { sessionID, tokens } = event.data
+            const { sessionID, tokens, assistantMessageID } = event.data
             if (planning(sessionID)) return Effect.void
-            return onEvent(sessionID, { _tag: "Usage", tokens: tokens.input + tokens.output + tokens.reasoning })
+            const closing = closingSteps.get(sessionID) === assistantMessageID
+            if (closing) closingSteps.delete(sessionID)
+            return onEvent(sessionID, { _tag: "Usage", tokens: tokens.input + tokens.output + tokens.reasoning, closing })
           }
           case "session.execution.succeeded":
             return onEvent(event.data.sessionID, {
@@ -255,6 +266,25 @@ export default Plugin.define({
           default:
             return Effect.void
         }
+      }
+
+      const recover = Effect.gen(function* () {
+        let after: string | undefined
+        do {
+          const page = yield* ctx.storage.scan({ prefix: "goal/", after, limit: 100 })
+          for (const entry of page.entries) {
+            const goal = decodeGoal(entry.value)
+            if (goal?.status === "active" && goal.directory === ctx.location.directory) {
+              yield* transition(entry.key.slice("goal/".length), { _tag: "Recovered" }, { quiet: true })
+            }
+          }
+          after = page.next
+        } while (after)
+      })
+
+      if (!RECOVERED_LOCATIONS.has(ctx.location.directory)) {
+        RECOVERED_LOCATIONS.add(ctx.location.directory)
+        yield* recover.pipe(Effect.catchCause((cause) => Effect.logError("goal: recovery failed", cause)))
       }
 
       yield* ctx.event.subscribe().pipe(

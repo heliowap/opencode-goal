@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { parseCommand } from "../src/command.ts"
+import { parseCommand, parseTokens } from "../src/command.ts"
 
 test.each([
   ["", { _tag: "Status" }],
@@ -19,4 +19,17 @@ test.each([
   ["--tokens 3K", { _tag: "Invalid", message: "Write the objective after --tokens N." }],
 ] as const)("parseCommand(%p)", (input, expected) => {
   expect(parseCommand(input)).toEqual(expected)
+})
+
+test.each([
+  ["2k", 2_000],
+  ["2K", 2_000],
+  ["0.5m", 500_000],
+  ["10", 10],
+  ["0.0001", undefined],
+  ["-5", undefined],
+  ["5x", undefined],
+  ["", undefined],
+] as const)("parseTokens(%p) = %p", (text, expected) => {
+  expect(parseTokens(text)).toBe(expected)
 })

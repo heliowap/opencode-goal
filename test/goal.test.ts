@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { decodeGoal, step, type Goal } from "../src/goal.ts"
+import { decodeGoal, isUnfinished, step, type Goal } from "../src/goal.ts"
 
 const T0 = 1_000
 const T1 = 2_000
@@ -35,6 +35,29 @@ describe("set and edit", () => {
     expect(step(active({ tokensUsed: 900, emptyTurns: 2 }), { _tag: "Edit", objective: "narrower" }, T1)).toEqual({
       goal: active({ objective: "narrower", tokensUsed: 900, updatedAt: T1 }),
       effect: { _tag: "ObjectiveUpdated" },
+    })
+  })
+
+  test("Edit on a complete goal refuses like resume does (#1)", () => {
+    const done = active({ status: "complete", note: "all green" })
+    expect(step(done, { _tag: "Edit", objective: "x" }, T1)).toEqual({
+      goal: done,
+      effect: { _tag: "Notify", text: "The goal is complete. Set a new goal instead." },
+    })
+  })
+
+  test("Edit on a goal that used its budget refuses like resume does (#1)", () => {
+    const limited = active({ status: "budget_limited", tokenBudget: 1_000, tokensUsed: 1_200 })
+    expect(step(limited, { _tag: "Edit", objective: "x" }, T1)).toEqual({
+      goal: limited,
+      effect: { _tag: "Notify", text: "The goal has used its token budget. Set a new goal with a larger --tokens budget." },
+    })
+  })
+
+  test("Edit on a blocked goal keeps it blocked and points to resume", () => {
+    expect(step(active({ status: "blocked" }), { _tag: "Edit", objective: "x" }, T1)).toEqual({
+      goal: active({ status: "blocked", objective: "x", updatedAt: T1 }),
+      effect: { _tag: "Notify", text: "Objective updated. The goal is blocked; run /goal resume to continue." },
     })
   })
 
@@ -80,13 +103,13 @@ describe("continuation", () => {
 
 describe("token budget", () => {
   test("usage accumulates", () => {
-    expect(step(active({ tokensUsed: 100 }), { _tag: "Usage", tokens: 250 }, T1).goal).toEqual(
+    expect(step(active({ tokensUsed: 100 }), { _tag: "Usage", tokens: 250, closing: false }, T1).goal).toEqual(
       active({ tokensUsed: 350, updatedAt: T1 }),
     )
   })
 
   test("crossing the budget limits the goal and asks for a wrap-up", () => {
-    expect(step(active({ tokenBudget: 1_000, tokensUsed: 900 }), { _tag: "Usage", tokens: 200 }, T1)).toEqual({
+    expect(step(active({ tokenBudget: 1_000, tokensUsed: 900 }), { _tag: "Usage", tokens: 200, closing: false }, T1)).toEqual({
       goal: active({ tokenBudget: 1_000, tokensUsed: 1_100, status: "budget_limited", note: "Token budget reached.", updatedAt: T1 }),
       effect: { _tag: "WrapUp" },
     })
@@ -94,7 +117,7 @@ describe("token budget", () => {
 
   test("the wrap-up turn keeps counting without another wrap-up", () => {
     const limited = active({ tokenBudget: 1_000, tokensUsed: 1_100, status: "budget_limited" })
-    expect(step(limited, { _tag: "Usage", tokens: 50 }, T1)).toEqual({
+    expect(step(limited, { _tag: "Usage", tokens: 50, closing: false }, T1)).toEqual({
       goal: { ...limited, tokensUsed: 1_150, updatedAt: T1 },
       effect: { _tag: "None" },
     })
@@ -111,6 +134,20 @@ describe("token budget", () => {
       goal: limited,
       effect: { _tag: "Notify", text: "The goal has used its token budget. Set a new goal with a larger --tokens budget." },
     })
+  })
+})
+
+describe("usage of the step that ends the goal (#2)", () => {
+  test.each([["complete"], ["blocked"], ["paused"]] as const)("is charged to a goal the model just marked %s", (status) => {
+    expect(step(active({ status, tokensUsed: 500 }), { _tag: "Usage", tokens: 4_000, closing: true }, T1)).toEqual({
+      goal: active({ status, tokensUsed: 4_500, updatedAt: T1 }),
+      effect: { _tag: "None" },
+    })
+  })
+
+  test("later steps on an ended goal are not charged", () => {
+    const done = active({ status: "complete", tokensUsed: 4_500 })
+    expect(step(done, { _tag: "Usage", tokens: 4_000, closing: false }, T1)).toEqual({ goal: done, effect: { _tag: "None" } })
   })
 })
 
@@ -141,6 +178,25 @@ describe("model updates", () => {
   test("budget limits take precedence over a requested pause", () => {
     const limited = active({ status: "budget_limited" })
     expect(step(limited, { _tag: "PauseRequested", note: undefined }, T1).goal).toEqual(limited)
+  })
+})
+
+describe("recovery after a restart (#3)", () => {
+  test("an active goal comes back paused", () => {
+    expect(step(active({ tokensUsed: 700 }), { _tag: "Recovered" }, T1)).toEqual({
+      goal: active({
+        tokensUsed: 700,
+        status: "paused",
+        note: "Recovered after a restart. Run /goal resume to continue.",
+        updatedAt: T1,
+      }),
+      effect: { _tag: "None" },
+    })
+  })
+
+  test.each([["paused"], ["blocked"], ["budget_limited"], ["complete"]] as const)("a %s goal is left as it was", (status) => {
+    const goal = active({ status })
+    expect(step(goal, { _tag: "Recovered" }, T1)).toEqual({ goal, effect: { _tag: "None" } })
   })
 })
 
@@ -208,5 +264,106 @@ describe("decodeGoal", () => {
 
   test("rejects malformed or old-format storage", () => {
     expect(decodeGoal({ objective: "x", status: "active", turnBudget: 5, turnsUsed: 1 })).toBeUndefined()
+  })
+})
+
+describe("rejected transitions leave the goal unchanged", () => {
+  const paused = active({ status: "paused", note: "Paused by the user." })
+  const blocked = active({ status: "blocked", note: "x" })
+
+  test.each([
+    ["Complete on a paused goal", paused, { _tag: "Complete", note: "done" }],
+    ["Block on a paused goal", paused, { _tag: "Block", note: "stuck" }],
+    ["Block on a budget-limited goal", active({ status: "budget_limited" }), { _tag: "Block", note: "stuck" }],
+    ["PauseRequested on a blocked goal", blocked, { _tag: "PauseRequested", note: undefined }],
+    ["Usage on a paused goal", paused, { _tag: "Usage", tokens: 50, closing: false }],
+    ["Usage on a complete goal", active({ status: "complete" }), { _tag: "Usage", tokens: 50, closing: false }],
+    ["a user interrupt on a blocked goal", blocked, { _tag: "Interrupted", reason: "user" }],
+    ["a shutdown interrupt on an active goal", active(), { _tag: "Interrupted", reason: "shutdown" }],
+    ["an inactivity interrupt on an active goal", active(), { _tag: "Interrupted", reason: "inactivity" }],
+    ["Failed on a paused goal", paused, { _tag: "Failed", message: "boom" }],
+    ["TurnEnded on a paused goal", paused, { _tag: "TurnEnded", activity: false, planning: false }],
+  ] as const)("%s", (_name, goal, event) => {
+    expect(step(goal, event, T1)).toEqual({ goal, effect: { _tag: "None" } })
+  })
+})
+
+describe("user controls on goals that cannot take them", () => {
+  test("pause on a paused goal explains why", () => {
+    const paused = active({ status: "paused" })
+    expect(step(paused, { _tag: "Pause" }, T1)).toEqual({
+      goal: paused,
+      effect: { _tag: "Notify", text: "The goal is paused; nothing to pause." },
+    })
+  })
+
+  test("resume on an active goal explains it is already active", () => {
+    expect(step(active(), { _tag: "Resume" }, T1)).toEqual({
+      goal: active(),
+      effect: { _tag: "Notify", text: "The goal is already active." },
+    })
+  })
+
+  test("resume keeps usage when the budget still has room", () => {
+    expect(step(active({ status: "paused", tokenBudget: 1_000, tokensUsed: 500 }), { _tag: "Resume" }, T1)).toEqual({
+      goal: active({ tokenBudget: 1_000, tokensUsed: 500, updatedAt: T1 }),
+      effect: { _tag: "Continue" },
+    })
+  })
+
+  test.each([["Resume"], ["Clear"]] as const)("%s without a goal explains there is none", (tag) => {
+    expect(step(undefined, { _tag: tag }, T1)).toEqual({
+      goal: undefined,
+      effect: { _tag: "Notify", text: "No goal is set for this session." },
+    })
+  })
+
+  test("edit without a goal explains there is none", () => {
+    expect(step(undefined, { _tag: "Edit", objective: "x" }, T1)).toEqual({
+      goal: undefined,
+      effect: { _tag: "Notify", text: "No goal is set for this session." },
+    })
+  })
+
+  test("events from the session are ignored without a goal", () => {
+    expect(step(undefined, { _tag: "Usage", tokens: 10, closing: false }, T1)).toEqual({ goal: undefined, effect: { _tag: "None" } })
+    expect(step(undefined, { _tag: "TurnEnded", activity: true, planning: false }, T1)).toEqual({
+      goal: undefined,
+      effect: { _tag: "None" },
+    })
+  })
+})
+
+describe("model notes and budgets", () => {
+  test("a requested pause keeps the model's note", () => {
+    expect(step(active(), { _tag: "PauseRequested", note: "user said stop" }, T1).goal).toEqual(
+      active({ status: "paused", note: "user said stop", updatedAt: T1 }),
+    )
+  })
+
+  test("usage under the budget accumulates without a wrap-up", () => {
+    expect(step(active({ tokenBudget: 1_000, tokensUsed: 100 }), { _tag: "Usage", tokens: 200, closing: false }, T1)).toEqual({
+      goal: active({ tokenBudget: 1_000, tokensUsed: 300, updatedAt: T1 }),
+      effect: { _tag: "None" },
+    })
+  })
+
+  test("usage landing exactly on the budget limits the goal", () => {
+    expect(step(active({ tokenBudget: 1_000, tokensUsed: 800 }), { _tag: "Usage", tokens: 200, closing: false }, T1).goal?.status).toBe(
+      "budget_limited",
+    )
+  })
+})
+
+describe("isUnfinished", () => {
+  test.each([
+    ["no goal", undefined, false],
+    ["complete", active({ status: "complete" }), false],
+    ["active", active(), true],
+    ["paused", active({ status: "paused" }), true],
+    ["blocked", active({ status: "blocked" }), true],
+    ["budget_limited", active({ status: "budget_limited" }), true],
+  ] as const)("%s -> %p", (_name, goal, expected) => {
+    expect(isUnfinished(goal)).toBe(expected)
   })
 })

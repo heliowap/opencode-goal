@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: 1.4.0
+  OPENCODE_VERSION: 2.0.24
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - run: bun test --coverage
+
+  host:
+    name: host (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [lifecycle, budget, controls, failure, persistence, package]
+    env:
+      GOAL_HOST_KEEP: "1"
+      GOAL_PLUGIN_SPEC: ${{ matrix.suite == 'package' && format('github:{0}#{1}', github.repository, github.event.pull_request.head.sha || github.sha) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            ~/.npm
+          key: host-${{ runner.os }}-${{ env.OPENCODE_VERSION }}-${{ hashFiles('bun.lock') }}
+      - run: bun install --frozen-lockfile
+      - run: npm install --global @opencode/cli@${{ env.OPENCODE_VERSION }}
+      - run: opencode --version
+      - run: mkdir -p "$RUNNER_TEMP/hosts"
+      - run: bun test ./host/${{ matrix.suite }}.test.ts
+        env:
+          TMPDIR: ${{ runner.temp }}/hosts
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-${{ matrix.suite }}
+          path: ${{ runner.temp }}/hosts
+          retention-days: 7
