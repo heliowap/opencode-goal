@@ -1,0 +1,45 @@
+# Coding standards
+
+## Architecture
+
+- `src/goal.ts` owns every state rule in the pure reducer `step(goal, event, now) -> { goal, effect }`. Add behavior as a new `GoalEvent` or `GoalEffect` variant and a reducer case. The reducer takes `now` as an argument and does no I/O.
+- `src/index.ts` is a thin adapter: it turns OpenCode events, the `/goal` command, and tool calls into `GoalEvent`s, then runs the returned `GoalEffect`. Every state change goes through `transition`, which holds the semaphore across load, step, save, and perform.
+- `src/command.ts` parses `/goal` arguments into a `GoalCommand` union. `src/prompts.ts` renders `templates/*.md` and formats status text.
+- Model data as tagged unions with `_tag` and `switch` exhaustively. Persisted data is an Effect `Schema`, decoded with `decodeGoal` at the storage boundary.
+
+## Effect and the plugin API
+
+- Use the Effect entry point `@opencode/plugin/effect` with `Effect.gen`. Register transforms, hooks, and the event stream inside the plugin scope so unload disposes them.
+- Declare tool inputs as plain JSON Schema through `toolInput(schema)` and decode inside `execute`. OpenCode rejected valid input against an Effect `Schema.Int` passed directly.
+- Fail tools with `Tool.Error` and a message the model can act on.
+- Isolate each event handler with `catchCause` so one bad event cannot stop the stream.
+- Act only on goals whose `directory` matches `ctx.location.directory` (`ownedGoal`). Several plugin instances, one per location, see the same events.
+- Synthetic messages: `resume: true` starts a turn, `delivery: "steer"` lands in the running turn, `"queue"` waits for the next one. Route continuations through `drive`, which sends at most one per turn.
+
+## Persistence
+
+- State lives in `ctx.storage` under `goal/<sessionID>`. Changing the `Goal` schema makes old records decode to `undefined`, which reads as "no goal". Accept that or migrate in `decodeGoal`.
+
+## Prompts and text
+
+- All text the user or model reads is English.
+- Prompts live in `templates/` with `{{placeholder}}` slots. Pass the objective through `escapeXml`, since it is user data inside `<objective>` tags.
+- `templates/continuation.md`, `budget_limit.md`, `objective_updated.md`, and the tool descriptions are adapted from OpenAI Codex under Apache-2.0. When you change them, keep `NOTICE` accurate.
+
+## Comments
+
+Keep a comment only for a non-obvious why, such as a host quirk. State the observed fact, and leave out guesses about causes.
+
+## Tests
+
+- Test behavior: call `step`, `parseCommand`, and the prompt functions the way the plugin does, and assert against literal expected values with `toEqual`.
+- Every reducer branch has a test. A new event or effect ships with its tests.
+- `bun test` and `bun run typecheck` pass before every commit.
+
+## End-to-end checks
+
+Unit tests cannot see the host. Changes to `src/index.ts` or event handling need a real session:
+
+- The service hot-reloads the plugin through the `~/.config/opencode/plugins/goal.ts` symlink, so saving `src/` changes every live session. Running `opencode service restart` from inside an OpenCode session kills that session too.
+- `opencode run` sends `/goal ...` as plain text. Invoke the command with `opencode api post /api/session/<id>/command --data '{"name":"goal","text":"..."}'`.
+- Run each scenario in its own temp directory and session. Read the outcome from `opencode session export <id>` and `opencode api get /api/session/<id>/inbox`.
