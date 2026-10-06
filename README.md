@@ -4,10 +4,16 @@
 
 ## Instalar
 
+Requer OpenCode 2 e Bun.
+
 ```sh
+git clone https://github.com/heliowap/opencode-goal.git
+cd opencode-goal
 bun install
 ./install.sh
 ```
+
+Reinicie o serviço com `opencode service restart` para carregar o plugin.
 
 O `install.sh` cria dois links em `~/.config/opencode`. `plugins/goal.ts` aponta para `src/index.ts` e `skills/goal` aponta para `skill/`.
 
