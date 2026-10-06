@@ -80,11 +80,10 @@ git clone https://github.com/heliowap/opencode-v2-goal-plugin.git
 cd opencode-v2-goal-plugin
 bun install
 opencode plugin remove github:heliowap/opencode-v2-goal-plugin   # if installed, so only one goal plugin loads
-rm -f ~/.config/opencode/plugins/goal.ts                          # older single-file link
 ln -sfn "$PWD/src" ~/.config/opencode/plugins/goal
 ```
 
-The directory link loads both entrypoints: `src/index.ts` on the server and `src/tui.tsx` in the terminal.
+The directory link loads both entrypoints: `src/index.ts` on the server and `src/tui.tsx` in the terminal. If you previously linked the single file `~/.config/opencode/plugins/goal.ts`, remove it and run `opencode service restart` before adding the directory link. OpenCode 2.0.24 fails to load a directory that replaces a single-file plugin of the same name in a running service, with `Cannot find package '@opencode/plugin'`.
 
 OpenCode reloads the plugin when you save files under `src/`.
 
