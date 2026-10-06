@@ -25,7 +25,7 @@
 
 ## Prompts and text
 
-- All text the user or model reads is English.
+- Everything in the project is in English: code, identifiers, comments, prompts, tests, docs, commit messages, issues, and pull requests.
 - Prompts live in `templates/` with `{{placeholder}}` slots. Pass the objective through `escapeXml`, since it is user data inside `<objective>` tags.
 - `templates/continuation.md`, `budget_limit.md`, `objective_updated.md`, and the tool descriptions are adapted from OpenAI Codex under Apache-2.0. When you change them, keep `NOTICE` accurate.
 
