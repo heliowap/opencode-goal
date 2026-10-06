@@ -35,6 +35,7 @@ Keep a comment only for a non-obvious why, such as a host quirk. State the obser
 - Test behavior: call `step`, `parseCommand`, and the prompt functions the way the plugin does, and assert against literal expected values with `toEqual`.
 - Every reducer branch has a test. A new event or effect ships with its tests.
 - `bun test` and `bun run typecheck` pass before every commit.
+- `bun run mutation` keeps a 100% mutation score on `src/goal.ts`, `src/command.ts`, and `src/prompts.ts`. A surviving mutant means a missing test or redundant code: add the test, or delete the code. Do not exclude mutants.
 
 ## Host canaries
 

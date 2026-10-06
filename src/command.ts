@@ -25,7 +25,7 @@ export const parseCommand = (text: string): GoalCommand => {
 
   const edit = /^edit(?:\s+|$)/i.exec(trimmed)
   if (edit) {
-    const objective = trimmed.slice(edit[0].length).trim()
+    const objective = trimmed.slice(edit[0].length)
     return objective ? { _tag: "Edit", objective } : { _tag: "Invalid", message: "Write the new objective after /goal edit." }
   }
 
@@ -36,7 +36,7 @@ export const parseCommand = (text: string): GoalCommand => {
   if (tokens === undefined) {
     return { _tag: "Invalid", message: `--tokens needs a positive number such as 50000, 250K or 1.5M, got "${budget[1]}".` }
   }
-  const objective = trimmed.slice(budget[0].length).trim()
+  const objective = trimmed.slice(budget[0].length)
   return objective
     ? { _tag: "Set", objective, tokenBudget: tokens }
     : { _tag: "Invalid", message: "Write the objective after --tokens N." }

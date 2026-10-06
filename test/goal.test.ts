@@ -258,8 +258,8 @@ describe("user controls", () => {
 })
 
 describe("decodeGoal", () => {
-  test("accepts a stored goal", () => {
-    expect(decodeGoal(active())).toEqual(active())
+  test.each([["active"], ["paused"], ["blocked"], ["budget_limited"], ["complete"]] as const)("accepts a stored %s goal", (status) => {
+    expect(decodeGoal(active({ status }))).toEqual(active({ status }))
   })
 
   test("rejects malformed or old-format storage", () => {

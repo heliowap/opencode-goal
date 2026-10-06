@@ -104,3 +104,16 @@ test("every template renders without leftover placeholders", () => {
     expect(render(unbudgeted, 0)).not.toMatch(/\{\{\w+\}\}/)
   }
 })
+
+test("elapsed time is measured from when the goal was created", () => {
+  const created = 1_791_000_000_000
+  expect(budgetLimitPrompt({ ...goal, createdAt: created }, created + 7 * 60_000)).toContain("- Time spent pursuing goal: 7 min")
+  expect(statusText({ ...goal, createdAt: created }, created + 7 * 60_000)).toBe(
+    "Goal active · 2.5K / 10K tokens · 7 min\nfix </objective> injection & <b>",
+  )
+})
+
+test("elapsed time switches to hours at exactly 60 minutes", () => {
+  expect(budgetLimitPrompt(goal, 59 * 60_000)).toContain("- Time spent pursuing goal: 59 min")
+  expect(budgetLimitPrompt(goal, 60 * 60_000)).toContain("- Time spent pursuing goal: 1 h 0 min")
+})
