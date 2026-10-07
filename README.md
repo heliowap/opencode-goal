@@ -19,8 +19,9 @@ This installs the plugin and adds it to your global `opencode.jsonc`. If `/goal`
 
 | Surface | Status |
 |---|---|
-| OpenCode 2.0.24 | Verified by 22 host canaries against a real `opencode serve`, graded on stored state. They run in CI on every push. |
+| OpenCode 2.0.24 | Verified by 24 host canaries against a real `opencode serve`, graded on stored state. They run in CI on every push. |
 | Status above the input (terminal UI) | Verified by 2 canaries that drive the real `opencode` terminal in tmux and read the screen |
+| Headless `opencode run` | Works against a running server (`--server` or the background service). With `--standalone` the goal stops after the first turn, see [Headless runs](#headless-runs) |
 | Live models | `devin/swe-2`, `gemini-3.8-flash`, and the free `nemotron-3.5-lightning-free` complete real goals, stop at budgets, and survive a restart |
 | `/goal` typed in the terminal UI, desktop and web apps, Windows, other OpenCode versions | Not established |
 
@@ -62,6 +63,19 @@ The agent can also create, read, and finish goals with the `goal_create`, `goal_
 - Turns run by the `plan` agent neither count nor continue the goal.
 
 All state rules live in the pure reducer `step` in `src/goal.ts`. `src/index.ts` only translates OpenCode events into `GoalEvent`s and runs the returned `GoalEffect`.
+
+## Headless runs
+
+`opencode run` returns when its first turn ends. The server keeps continuing the goal after that, so a headless goal needs a server that outlives the command. `opencode run --standalone` stops its private server on exit, and the goal stops with it; it comes back paused the next time a server starts.
+
+For CI, start a server, create the goal through `opencode run --server`, and poll the goal until it leaves `active`:
+
+```sh
+opencode serve --hostname 127.0.0.1 --port 4096 &
+id=$(opencode run --server http://127.0.0.1:4096 --format json "Set a goal: <objective>" | grep -o '"sessionID":"ses_[^"]*"' | head -1 | cut -d'"' -f4)
+until opencode api --server http://127.0.0.1:4096 post "/api/rpc/goal/get?location[directory]=$PWD" \
+  -d "{\"input\":{\"sessionID\":\"$id\"}}" | grep -qv '"status":"active"'; do sleep 10; done
+```
 
 ## Known limitation
 
