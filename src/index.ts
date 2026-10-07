@@ -1,9 +1,10 @@
 import { Plugin } from "@opencode/plugin/effect"
 import { Tool } from "@opencode/schema/tool"
 import { Effect, Schema, Semaphore, Stream } from "effect"
+import { spawn } from "node:child_process"
 import { parseCommand } from "./command.ts"
 import { formatTokens } from "./format.ts"
-import { decodeGoal, isUnfinished, step, type Goal, type GoalEffect, type GoalEvent } from "./goal.ts"
+import { decodeGoal, isUnfinished, step, type Check, type Goal, type GoalEffect, type GoalEvent } from "./goal.ts"
 import {
   budgetLimitPrompt,
   COMMAND_HELP,
@@ -11,6 +12,7 @@ import {
   objectiveUpdatedPrompt,
   sessionContext,
   statusText,
+  verifyFailedText,
 } from "./prompts.ts"
 import { GoalRpc } from "./rpc.ts"
 
@@ -79,6 +81,29 @@ const updateEvents = {
   blocked: (note) => ({ _tag: "Block", note }),
   paused: (note) => ({ _tag: "PauseRequested", note }),
 } satisfies Record<typeof UpdateInput.Type.status, (note: string | undefined) => GoalEvent>
+
+const OUTPUT_LIMIT = 64_000
+
+type CheckRun = Check & { readonly output: string }
+
+// Interrupting the turn interrupts this effect, which kills the whole process group.
+const runCheck = (command: string, directory: string) =>
+  Effect.callback<CheckRun>((resume) => {
+    let output = ""
+    const child = spawn("sh", ["-c", command], { cwd: directory, detached: true, stdio: ["ignore", "pipe", "pipe"] })
+    const collect = (chunk: Buffer) => {
+      output = (output + chunk.toString()).slice(-OUTPUT_LIMIT)
+    }
+    child.stdout.on("data", collect)
+    child.stderr.on("data", collect)
+    child.on("error", (error) => resume(Effect.succeed({ command, exitCode: 127, output: error.message })))
+    child.on("close", (code, signal) =>
+      resume(Effect.succeed({ command, exitCode: code ?? 128, output: signal ? `${output}\nKilled by ${signal}.` : output })),
+    )
+    return Effect.sync(() => {
+      if (child.pid !== undefined && child.exitCode === null) process.kill(-child.pid, "SIGKILL")
+    })
+  })
 
 const toolError = (error: unknown) =>
   error instanceof Tool.Error ? error : new Tool.Error({ message: `goal: ${String(error)}` })
@@ -201,6 +226,7 @@ export default Plugin.define({
                 _tag: "Create",
                 objective: input.objective,
                 tokenBudget: input.token_budget ?? null,
+                verify: null,
                 directory: ctx.location.directory,
               })
               if (isUnfinished(before)) {
@@ -237,8 +263,15 @@ export default Plugin.define({
           execute: (raw, context) =>
             Effect.gen(function* () {
               const input = yield* updateInput.decode(raw)
-              const { before, goal } = yield* transition(context.sessionID, updateEvents[input.status](input.note))
+              const current = yield* load(context.sessionID)
+              const check =
+                input.status === "complete" && current?.verify !== undefined && (current.status === "active" || current.status === "budget_limited")
+                  ? yield* runCheck(current.verify, current.directory)
+                  : undefined
+              const event: GoalEvent = check ? { _tag: "Complete", note: input.note, check } : updateEvents[input.status](input.note)
+              const { before, goal } = yield* transition(context.sessionID, event)
               if (!before) return yield* new Tool.Error({ message: "No goal is set for this session." })
+              if (check && check.exitCode !== 0 && goal) return yield* new Tool.Error({ message: verifyFailedText(goal, check) })
               if (goal?.status !== input.status) {
                 return yield* new Tool.Error({
                   message: `The goal is ${goal?.status ?? "cleared"} and cannot move to ${input.status}.`,

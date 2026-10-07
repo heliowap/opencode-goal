@@ -11,6 +11,9 @@ export const Goal = Schema.Struct({
   emptyTurns: Schema.Int,
   directory: Schema.String,
   note: Schema.optional(Schema.String),
+  verify: Schema.optional(Schema.String),
+  verifyFailures: Schema.optional(Schema.Int),
+  lastExitCode: Schema.optional(Schema.Int),
   createdAt: Schema.Finite,
   updatedAt: Schema.Finite,
 })
@@ -22,14 +25,26 @@ export const decodeGoal = (value: unknown): Goal | undefined =>
 const EMPTY_TURN_LIMIT = 3
 
 export type GoalEvent =
-  | { readonly _tag: "Set"; readonly objective: string; readonly tokenBudget: number | null; readonly directory: string }
-  | { readonly _tag: "Create"; readonly objective: string; readonly tokenBudget: number | null; readonly directory: string }
+  | {
+      readonly _tag: "Set"
+      readonly objective: string
+      readonly tokenBudget: number | null
+      readonly verify: string | null
+      readonly directory: string
+    }
+  | {
+      readonly _tag: "Create"
+      readonly objective: string
+      readonly tokenBudget: number | null
+      readonly verify: null
+      readonly directory: string
+    }
   | { readonly _tag: "Moved"; readonly directory: string }
   | { readonly _tag: "Edit"; readonly objective: string }
   | { readonly _tag: "Pause" }
   | { readonly _tag: "Resume" }
   | { readonly _tag: "Clear" }
-  | { readonly _tag: "Complete"; readonly note: string | undefined }
+  | { readonly _tag: "Complete"; readonly note: string | undefined; readonly check?: Check }
   | { readonly _tag: "Block"; readonly note: string | undefined }
   | { readonly _tag: "PauseRequested"; readonly note: string | undefined }
   | { readonly _tag: "Usage"; readonly tokens: number; readonly closing: boolean }
@@ -37,6 +52,11 @@ export type GoalEvent =
   | { readonly _tag: "Interrupted"; readonly reason: "user" | "shutdown" | "superseded" | "inactivity" }
   | { readonly _tag: "Failed"; readonly message: string }
   | { readonly _tag: "Recovered" }
+
+export interface Check {
+  readonly command: string
+  readonly exitCode: number
+}
 
 export type GoalEffect =
   | { readonly _tag: "None" }
@@ -79,6 +99,7 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
         tokensUsed: 0,
         emptyTurns: 0,
         directory: event.directory,
+        ...(event.verify !== null && { verify: event.verify }),
         createdAt: now,
         updatedAt: now,
       },
@@ -119,10 +140,14 @@ export const step = (goal: Goal | undefined, event: GoalEvent, now: number): Ste
       if (refusal) return { goal, effect: notify(refusal) }
       return update({ status: "active", note: undefined, emptyTurns: 0 }, { _tag: "Continue" })
     }
-    case "Complete":
-      return goal.status === "active" || goal.status === "budget_limited"
-        ? update({ status: "complete", note: event.note })
-        : unchanged
+    case "Complete": {
+      if (goal.status !== "active" && goal.status !== "budget_limited") return unchanged
+      if (goal.verify === undefined) return update({ status: "complete", note: event.note })
+      if (event.check?.command !== goal.verify) return unchanged
+      return event.check.exitCode === 0
+        ? update({ status: "complete", note: event.note, lastExitCode: 0 })
+        : update({ verifyFailures: (goal.verifyFailures ?? 0) + 1, lastExitCode: event.check.exitCode })
+    }
     case "Block":
       return goal.status === "active" ? update({ status: "blocked", note: event.note }) : unchanged
     case "Usage": {

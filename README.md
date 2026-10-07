@@ -19,7 +19,7 @@ This installs the plugin and adds it to your global `opencode.jsonc`. If `/goal`
 
 | Surface | Status |
 |---|---|
-| OpenCode 2.0.24 | Verified by 24 host canaries against a real `opencode serve`, graded on stored state. They run in CI on every push. |
+| OpenCode 2.0.24 | Verified by 26 host canaries against a real `opencode serve`, graded on stored state. They run in CI on every push. |
 | Status above the input (terminal UI) | Verified by 2 canaries that drive the real `opencode` terminal in tmux and read the screen |
 | Headless `opencode run` | Works against a running server (`--server` or the background service). With `--standalone` the goal stops after the first turn, see [Headless runs](#headless-runs) |
 | Live models | `devin/swe-2`, `gemini-3.8-flash`, and the free `nemotron-3.5-lightning-free` complete real goals, stop at budgets, and survive a restart |
@@ -32,6 +32,7 @@ Details, session evidence, and what is not proven: [`docs/compatibility.md`](doc
 ```text
 /goal make the checkout suite pass without changing the public API
 /goal --tokens 250K migrate the tests from Jest to Vitest
+/goal --verify "bun test" make the checkout suite pass
 /goal                    show status and token usage
 /goal edit <objective>   change the objective, keeping usage
 /goal pause
@@ -59,6 +60,7 @@ The agent can also create, read, and finish goals with the `goal_create`, `goal_
 - Three consecutive turns with no text and no tool use mark the goal `blocked`, so it cannot spin.
 - The model may mark the goal `blocked` only after the same blocker repeats for three turns, and `paused` only at the user's request.
 - Token usage is counted from each model step (input, output, and reasoning tokens). Crossing `--tokens` marks the goal `budget_limited` and steers the agent to wrap up.
+- With `--verify "cmd"`, `goal_update` with `complete` first runs `cmd` with `sh -c` in the goal's directory. The goal completes only if it exits 0. Otherwise the goal stays open, the plugin counts the failed check, and the model gets the exit code and the end of the output. Interrupting the turn kills the command. Only the user can set the command: `goal_create` cannot, because a plugin tool cannot ask for `bash` permission per call.
 - A user interrupt pauses the goal. A failed turn blocks it so retries cannot loop.
 - Turns run by the `plan` agent neither count nor continue the goal.
 

@@ -4,7 +4,7 @@ export type GoalCommand =
   | { readonly _tag: "Resume" }
   | { readonly _tag: "Clear" }
   | { readonly _tag: "Edit"; readonly objective: string }
-  | { readonly _tag: "Set"; readonly objective: string; readonly tokenBudget: number | null }
+  | { readonly _tag: "Set"; readonly objective: string; readonly tokenBudget: number | null; readonly verify: string | null }
   | { readonly _tag: "Invalid"; readonly message: string }
 
 const keywords = { "": "Status", status: "Status", pause: "Pause", resume: "Resume", clear: "Clear" } as const
@@ -29,15 +29,27 @@ export const parseCommand = (text: string): GoalCommand => {
     return objective ? { _tag: "Edit", objective } : { _tag: "Invalid", message: "Write the new objective after /goal edit." }
   }
 
-  const budget = /^--tokens(?:=|\s+)(\S+)\s*/i.exec(trimmed)
-  if (!budget) return { _tag: "Set", objective: trimmed, tokenBudget: null }
-
-  const tokens = parseTokens(budget[1]!)
-  if (tokens === undefined) {
-    return { _tag: "Invalid", message: `--tokens needs a positive number such as 50000, 250K or 1.5M, got "${budget[1]}".` }
+  let rest = trimmed
+  let tokenBudget: number | null = null
+  let verify: string | null = null
+  for (;;) {
+    const tokens = /^--tokens(?:=|\s+)(\S+)\s*/i.exec(rest)
+    if (tokens) {
+      if (tokenBudget !== null) return { _tag: "Invalid", message: "--tokens can be given only once." }
+      const parsed = parseTokens(tokens[1]!)
+      if (parsed === undefined) {
+        return { _tag: "Invalid", message: `--tokens needs a positive number such as 50000, 250K or 1.5M, got "${tokens[1]}".` }
+      }
+      tokenBudget = parsed
+      rest = rest.slice(tokens[0].length)
+      continue
+    }
+    if (!/^--verify(?=[=\s]|$)/i.test(rest)) break
+    if (verify !== null) return { _tag: "Invalid", message: "--verify can be given only once." }
+    const command = /^--verify(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s"']+))\s*/i.exec(rest)
+    if (!command) return { _tag: "Invalid", message: '--verify needs a command such as --verify "bun test".' }
+    verify = command[1] ?? command[2] ?? command[3]!
+    rest = rest.slice(command[0].length)
   }
-  const objective = trimmed.slice(budget[0].length)
-  return objective
-    ? { _tag: "Set", objective, tokenBudget: tokens }
-    : { _tag: "Invalid", message: "Write the objective after --tokens N." }
+  return rest ? { _tag: "Set", objective: rest, tokenBudget, verify } : { _tag: "Invalid", message: "Write the objective after the options." }
 }

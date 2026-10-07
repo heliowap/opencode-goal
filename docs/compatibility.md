@@ -30,6 +30,8 @@ Every claim here comes from a real `opencode serve` process with no mocked plugi
 | A16 | A goal follows its session to a new directory | ✅ after #11 | stored `directory` updated, then `complete` after resume there |
 | H1 | A goal created through `opencode run --server` is finished by the server after the command exits | ✅ | real `opencode run --format json` and `opencode api` against the canary server, goal read through the `goal.get` RPC as `complete`, `a.txt`/`b.txt` contents, exactly 8 model requests |
 | H2 | `opencode run --standalone` stops the goal after its first turn | ⚠️ known limitation | stored `active`, no `a.txt`/`b.txt`, fewer than 8 model requests. The command returns after its first turn and its private server exits with it |
+| V1 | `--verify` refuses completion until the command exits 0 in the goal's directory | ✅ | first tool result names exit code 3 and the output, stored `complete` with `verifyFailures: 1`, `lastExitCode: 0` |
+| V2 | Interrupting a running check kills the command and pauses the goal | ✅ | `late.txt` never written, stored `paused`, no failed check counted |
 | A14 | The plugin installed from its package spec works | ✅ | stored `complete`. CI installs `github:<repo>#<commit under test>` |
 | A15 | `goal.get` RPC returns the stored goal and `goal.changed` fires on each transition | ✅ | RPC output equals the `kv` row, events read from `/api/event` |
 | T1 | The line above the input shows running with usage, then paused, then nothing after clear | ✅ | real `opencode` terminal in tmux, screen text above the input |

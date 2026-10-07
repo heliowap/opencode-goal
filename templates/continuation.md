@@ -14,7 +14,7 @@ Continuation behavior:
 Budget:
 - Tokens used: {{tokensUsed}}
 - Token budget: {{tokenBudget}}
-- Tokens remaining: {{tokensRemaining}}
+- Tokens remaining: {{tokensRemaining}}{{verification}}
 
 Work from evidence:
 Use the current worktree and external state as authoritative. Previous conversation context can help locate relevant work, but inspect the current state before relying on it. Improve, replace, or remove existing work as needed to satisfy the actual objective.

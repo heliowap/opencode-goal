@@ -20,15 +20,28 @@ const turn = (activity: boolean, planning = false) => ({ _tag: "TurnEnded", acti
 
 describe("set and edit", () => {
   test("Set creates an active goal and starts it", () => {
-    expect(step(undefined, { _tag: "Set", objective: "ship it", tokenBudget: 50_000, directory: "/repo" }, T0)).toEqual({
+    expect(step(undefined, { _tag: "Set", objective: "ship it", tokenBudget: 50_000, verify: null, directory: "/repo" }, T0)).toEqual({
       goal: active({ objective: "ship it", tokenBudget: 50_000 }),
       effect: { _tag: "Continue" },
     })
   })
 
-  test("Set replaces an existing goal and resets usage", () => {
-    const next = step(active({ status: "paused", tokensUsed: 900 }), { _tag: "Set", objective: "new", tokenBudget: null, directory: "/repo" }, T1)
+  test("Set replaces an existing goal and resets usage and its verify command", () => {
+    const old = active({ status: "paused", tokensUsed: 900, verify: "bun test", verifyFailures: 2, lastExitCode: 1 })
+    const next = step(old, { _tag: "Set", objective: "new", tokenBudget: null, verify: null, directory: "/repo" }, T1)
     expect(next.goal).toEqual(active({ objective: "new", createdAt: T1, updatedAt: T1 }))
+  })
+
+  test("Set stores the verify command", () => {
+    expect(step(undefined, { _tag: "Set", objective: "ship it", tokenBudget: null, verify: "bun test", directory: "/repo" }, T0).goal).toEqual(
+      active({ objective: "ship it", verify: "bun test" }),
+    )
+  })
+
+  test("Edit keeps the verify command", () => {
+    expect(step(active({ verify: "bun test" }), { _tag: "Edit", objective: "narrower" }, T1).goal).toEqual(
+      active({ objective: "narrower", verify: "bun test", updatedAt: T1 }),
+    )
   })
 
   test("Edit keeps usage and steers the active turn", () => {
@@ -169,7 +182,7 @@ describe("usage of the step that ends the goal (#2)", () => {
 })
 
 describe("goal_create (Create)", () => {
-  const create = { _tag: "Create", objective: "second", tokenBudget: 5_000, directory: "/other" } as const
+  const create = { _tag: "Create", objective: "second", tokenBudget: 5_000, verify: null, directory: "/other" } as const
 
   test("creates an active goal when the session has none or a complete one", () => {
     const created = active({ objective: "second", tokenBudget: 5_000, directory: "/other", createdAt: T1, updatedAt: T1 })
@@ -204,6 +217,45 @@ describe("model updates", () => {
       goal: active({ status: "complete", note: "done", updatedAt: T1 }),
       effect: { _tag: "None" },
     })
+  })
+
+  test("a passing check completes a goal that has a verify command", () => {
+    const goal = active({ verify: "bun test", verifyFailures: 1, lastExitCode: 1 })
+    const check = { command: "bun test", exitCode: 0 }
+    expect(step(goal, { _tag: "Complete", note: "done", check }, T1)).toEqual({
+      goal: active({ verify: "bun test", verifyFailures: 1, lastExitCode: 0, status: "complete", note: "done", updatedAt: T1 }),
+      effect: { _tag: "None" },
+    })
+  })
+
+  test("a failing check keeps the goal active and counts the failure", () => {
+    const check = { command: "bun test", exitCode: 2 }
+    const once = step(active({ verify: "bun test" }), { _tag: "Complete", note: "done", check }, T1)
+    expect(once).toEqual({ goal: active({ verify: "bun test", verifyFailures: 1, lastExitCode: 2, updatedAt: T1 }), effect: { _tag: "None" } })
+    expect(step(once.goal, { _tag: "Complete", note: "done", check: { command: "bun test", exitCode: 1 } }, T1).goal).toEqual(
+      active({ verify: "bun test", verifyFailures: 2, lastExitCode: 1, updatedAt: T1 }),
+    )
+  })
+
+  test("a failing check on a budget-limited goal keeps it budget-limited", () => {
+    const goal = active({ status: "budget_limited", verify: "bun test" })
+    expect(step(goal, { _tag: "Complete", note: "done", check: { command: "bun test", exitCode: 1 } }, T1).goal).toEqual(
+      active({ status: "budget_limited", verify: "bun test", verifyFailures: 1, lastExitCode: 1, updatedAt: T1 }),
+    )
+  })
+
+  test.each([
+    ["no check", undefined],
+    ["a check of another command", { command: "true", exitCode: 0 }],
+  ] as const)("a goal with a verify command does not complete on %s", (_, check) => {
+    const goal = active({ verify: "bun test" })
+    expect(step(goal, { _tag: "Complete", note: "done", check }, T1)).toEqual({ goal, effect: { _tag: "None" } })
+  })
+
+  test("a goal without a verify command ignores a check", () => {
+    expect(step(active(), { _tag: "Complete", note: "done", check: { command: "false", exitCode: 1 } }, T1).goal).toEqual(
+      active({ status: "complete", note: "done", updatedAt: T1 }),
+    )
   })
 
   test("block records the missing decision", () => {
