@@ -1,8 +1,10 @@
-import { readFileSync } from "node:fs"
+import { readFileSync, realpathSync } from "node:fs"
+import { pathToFileURL } from "node:url"
 import { formatTokens } from "./format.ts"
 import type { Check, Goal } from "./goal.ts"
 
-const template = (name: string) => readFileSync(new URL(`../templates/${name}.md`, import.meta.url), "utf8").trim()
+const moduleUrl = pathToFileURL(realpathSync(new URL(import.meta.url)))
+const template = (name: string) => readFileSync(new URL(`../templates/${name}.md`, moduleUrl), "utf8").trim()
 
 const templates = {
   continuation: template("continuation"),
