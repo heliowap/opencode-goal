@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test"
+import { cpSync, mkdtempSync, rmSync, symlinkSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import { formatTokens } from "../src/format.ts"
 import type { Goal } from "../src/goal.ts"
 import {
@@ -22,6 +26,41 @@ const goal: Goal = {
   createdAt: 0,
   updatedAt: 0,
 }
+
+test("templates load through a preserved source-directory symlink", () => {
+  const root = mkdtempSync(join(tmpdir(), "goal-templates-"))
+  try {
+    const physical = join(root, "physical plugin #?% 雪")
+    cpSync(resolve(import.meta.dir, "../src"), join(physical, "src"), { recursive: true })
+    cpSync(resolve(import.meta.dir, "../templates"), join(physical, "templates"), { recursive: true })
+    const link = join(root, "goal plugin %#")
+    symlinkSync(join(physical, "src"), link, "dir")
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        "--preserve-symlinks",
+        "-e",
+        `const prompts = await import(${JSON.stringify(pathToFileURL(join(link, "prompts.ts")).href)});
+       const goal = ${JSON.stringify(goal)};
+       console.log(JSON.stringify([
+         prompts.continuationPrompt(goal, 0),
+         prompts.budgetLimitPrompt(goal, 0),
+         prompts.objectiveUpdatedPrompt(goal, 0),
+         prompts.sessionContext(goal, 0),
+       ]));`,
+      ],
+      { cwd: root },
+    )
+    expect({ exitCode: result.exitCode, stderr: result.stderr.toString() }).toEqual({ exitCode: 0, stderr: "" })
+    const prompts = JSON.parse(result.stdout.toString()) as string[]
+    for (const prompt of prompts) {
+      expect(prompt).toContain("<objective>\nfix &lt;/objective&gt; injection &amp; &lt;b&gt;\n</objective>")
+    }
+    expect(prompts).toHaveLength(4)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test("render fills known placeholders and leaves unknown ones", () => {
   expect(render("{{a}} and {{b}}", { a: "x" })).toBe("x and {{b}}")
